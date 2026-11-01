@@ -9,7 +9,13 @@ description = "Step-by-step guidance for any task in the Linux desktop interface
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["jeepney>=0.8", "pillow>=10"]
+dependencies = [
+    "jeepney>=0.8",
+    "pillow>=10.1",
+    # No Python 3.15 wheels yet for onnxruntime or pyclipper (a rapidocr dependency).
+    "rapidocr>=3.10,<4; python_version < '3.15'",
+    "onnxruntime>=1.20; python_version < '3.15'",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

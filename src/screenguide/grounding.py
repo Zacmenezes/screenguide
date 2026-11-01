@@ -24,10 +24,11 @@ class GroundingStrategy(Protocol):
 
 
 class NumberingGrounding:
-    """Stub: numbers the boxes from 1 and leaves the image undrawn."""
+    """Stub: uses the detector's numbers and leaves the image undrawn."""
 
     def mark(self, screenshot: Screenshot, elements: list[Element]) -> MarkedScreen:
-        return MarkedScreen(image=screenshot, elements=dict(enumerate(elements, start=1)))
+        numbered = {element.id: element for element in elements}
+        return MarkedScreen(image=screenshot, elements=numbered)
 
     def resolve(self, marked: MarkedScreen, element_id: int) -> BBox | None:
         element = marked.elements.get(element_id)

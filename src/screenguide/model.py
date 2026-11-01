@@ -31,18 +31,23 @@ class ModelProvider(Protocol):
 
 
 class StubProvider:
-    """Stub: gives the same reply and made-up token counts to any request."""
+    """Stub: picks the first box, with made-up token counts; `null` if there are no boxes."""
 
     name = "stub"
     model = "stub"
 
     def complete(self, request: ModelRequest) -> ModelReply:
+        elements = request.marked.elements
+        element_id = min(elements, default=None)
+        label = elements[element_id].text if element_id is not None else None
         return ModelReply(
             text=json.dumps(
                 {
-                    "element_id": 2,
-                    "target_label": "Settings",
-                    "instruction": "Click Settings in the top menu, between File and Help.",
+                    "element_id": element_id,
+                    "target_label": label,
+                    "instruction": f"Click {label}, the first text on the screen."
+                    if label
+                    else "No text was found on the screen.",
                     "done": False,
                     "confidence": 0.8,
                 }

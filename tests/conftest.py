@@ -3,6 +3,23 @@ import subprocess
 
 import pytest
 
+from screenguide.detection import BBox, Element
+
+ELEMENTS = (
+    Element(1, "File", BBox(x=10, y=8, width=40, height=20), 0.9),
+    Element(2, "Settings", BBox(x=60, y=8, width=70, height=20), 0.9),
+    Element(3, "Help", BBox(x=140, y=8, width=40, height=20), 0.9),
+)
+
+
+class FixedDetector:
+    def __init__(self, elements=ELEMENTS):
+        self._elements = list(elements)
+
+    def detect(self, screenshot):
+        return self._elements
+
+
 BUS_CONFIG = """<busconfig>
   <type>session</type>
   <listen>unix:path={socket}</listen>
@@ -52,3 +69,9 @@ def image(tmp_path):
     path = tmp_path / "screen.png"
     path.write_bytes(b"not decoded by the stub")
     return path
+
+
+@pytest.fixture(autouse=True)
+def fixed_detector(monkeypatch):
+    """CLI tests cross every layer except OCR; `test_detection.py` overrides this to use it."""
+    monkeypatch.setattr("screenguide.cli.RapidOcrDetector", FixedDetector)

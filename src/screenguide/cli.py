@@ -8,7 +8,7 @@ from pathlib import Path
 from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
 from screenguide.config import ConfigError, load_config
 from screenguide.contract import InvalidModelResponse
-from screenguide.detection import StubDetector
+from screenguide.detection import DetectionError, RapidOcrDetector, annotate
 from screenguide.grounding import NumberingGrounding
 from screenguide.model import StubProvider
 from screenguide.monitors import MonitorError, format_monitors, read_monitors
@@ -44,19 +44,36 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
         session = GuideSession(
             goal=goal,
             capturer=capturer,
-            detector=StubDetector(),
+            detector=RapidOcrDetector(),
             grounding=NumberingGrounding(),
             provider=StubProvider(),
             tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
         )
         step = session.next_step()
-    except (OSError, ConfigError, CaptureError, MonitorError) as exc:
+    except (OSError, ConfigError, CaptureError, MonitorError, DetectionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except InvalidModelResponse as exc:
         print(f"error: invalid model response: {exc}", file=sys.stderr)
         return 1
     print(format_step(step))
+    return 0
+
+
+def detect(image: Path, output: Path) -> int:
+    try:
+        screenshot = FileCapturer(image).capture()
+        elements = RapidOcrDetector().detect(screenshot)
+        output.write_bytes(annotate(screenshot, elements))
+    except (OSError, DetectionError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for element in elements:
+        box = element.bbox
+        print(
+            f"{element.id}: {element.text!r} x={box.x} y={box.y} "
+            f"width={box.width} height={box.height} confidence={element.confidence:.2f}"
+        )
     return 0
 
 
@@ -88,10 +105,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--capture", action="store_true", help="capture the real screen")
     run_parser.add_argument("--goal", required=True, help="what the user wants to do")
     run_parser.add_argument("--monitor", help="connector name of the monitor to capture")
+    detect_parser = commands.add_parser("detect", help="find the text elements in an image")
+    detect_parser.add_argument("--image", type=Path, required=True, help="image file to read")
+    detect_parser.add_argument(
+        "--output", type=Path, required=True, help="where to write the annotated PNG"
+    )
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")
 
     args = parser.parse_args(argv)
+    if args.command == "detect":
+        return detect(args.image, args.output)
     if args.command == "usage":
         return usage()
     if args.command == "monitors":
