@@ -19,6 +19,18 @@ def test_missing_file_means_defaults(home, monkeypatch):
     assert load_config().usage_log == home / ".local" / "share" / "screenguide" / "usage"
 
 
+def test_screenshots_are_not_saved_by_default():
+    assert load_config().screenshot_dir is None
+
+
+def test_screenshot_dir_comes_from_file_or_environment(config_file, monkeypatch):
+    config_file.write_text('screenshot_dir = "/from/file"\n')
+    assert load_config().screenshot_dir == Path("/from/file")
+
+    monkeypatch.setenv("SCREENGUIDE_SCREENSHOT_DIR", "/from/env")
+    assert load_config().screenshot_dir == Path("/from/env")
+
+
 def test_file_overrides_default(config_file, monkeypatch):
     monkeypatch.delenv("SCREENGUIDE_USAGE_LOG")
     config_file.write_text('usage_log = "/from/file"\n')

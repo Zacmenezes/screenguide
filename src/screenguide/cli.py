@@ -5,7 +5,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from screenguide.capture import FileCapturer
+from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
 from screenguide.config import ConfigError, load_config
 from screenguide.contract import InvalidModelResponse
 from screenguide.detection import StubDetector
@@ -32,18 +32,22 @@ def format_step(step: Step) -> str:
     )
 
 
-def run(image: Path, goal: str) -> int:
+def run(image: Path | None, goal: str) -> int:
     try:
+        config = load_config()
+        capturer: ScreenCapturer = (
+            FileCapturer(image) if image else PortalCapturer(save_dir=config.screenshot_dir)
+        )
         session = GuideSession(
             goal=goal,
-            capturer=FileCapturer(image),
+            capturer=capturer,
             detector=StubDetector(),
             grounding=NumberingGrounding(),
             provider=StubProvider(),
-            tracker=JsonlUsageTracker(load_config().usage_log, load_pricing()),
+            tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
         )
         step = session.next_step()
-    except (OSError, ConfigError) as exc:
+    except (OSError, ConfigError, CaptureError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except InvalidModelResponse as exc:
@@ -66,8 +70,10 @@ def usage() -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="screenguide")
     commands = parser.add_subparsers(dest="command", required=True)
-    run_parser = commands.add_parser("run", help="produce one step for an image and a goal")
-    run_parser.add_argument("--image", type=Path, required=True, help="image file to read")
+    run_parser = commands.add_parser("run", help="produce one step for a screen and a goal")
+    source = run_parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--image", type=Path, help="image file to read")
+    source.add_argument("--capture", action="store_true", help="capture the real screen")
     run_parser.add_argument("--goal", required=True, help="what the user wants to do")
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
 
