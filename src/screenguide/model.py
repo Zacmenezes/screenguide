@@ -31,7 +31,7 @@ class ModelProvider(Protocol):
 
 
 class StubProvider:
-    """Stub: gives the same reply to any request and reports no usage."""
+    """Stub: gives the same reply and made-up token counts to any request."""
 
     name = "stub"
     model = "stub"
@@ -46,5 +46,7 @@ class StubProvider:
                     "done": False,
                     "confidence": 0.8,
                 }
-            )
+            ),
+            input_tokens=1000,
+            output_tokens=100,
         )
