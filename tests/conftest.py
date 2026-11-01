@@ -2,8 +2,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def usage_log(tmp_path, monkeypatch):
+def home(tmp_path, monkeypatch):
     """Keep every test out of the real home."""
+    path = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(path))
+    return path
+
+
+@pytest.fixture(autouse=True)
+def usage_log(tmp_path, monkeypatch):
     path = tmp_path / "usage"
     monkeypatch.setenv("SCREENGUIDE_USAGE_LOG", str(path))
     return path

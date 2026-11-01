@@ -1,0 +1,27 @@
+# Copy to ~/.config/screenguide/pricing.toml and keep the prices up to date.
+# A model missing from this table has unknown cost; Ollama always costs 0.
+#
+# Sections are [provider."model"], with prices in USD per million tokens.
+# Prices below are Anthropic's standard first-party API rates, checked 2026-10-06. They do not
+# cover prompt caching, batch or fast mode, and Haiku 5.5 costs more above 100K prompt tokens.
+
+[anthropic."claude-fable-5-1"]
+input_usd_per_mtok = 10.00
+output_usd_per_mtok = 50.00
+
+[anthropic."claude-opus-5-5"]
+input_usd_per_mtok = 4.00
+output_usd_per_mtok = 20.00
+
+[anthropic."claude-sonnet-5-5"]
+input_usd_per_mtok = 2.00
+output_usd_per_mtok = 10.00
+
+[anthropic."claude-haiku-5-5"]
+input_usd_per_mtok = 0.10
+output_usd_per_mtok = 0.50
+
+# The stub provider costs nothing to run. This made-up price only exercises the cost path.
+[stub."stub"]
+input_usd_per_mtok = 1.00
+output_usd_per_mtok = 5.00

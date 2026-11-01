@@ -6,12 +6,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from screenguide.capture import FileCapturer
+from screenguide.config import ConfigError, load_config
 from screenguide.contract import InvalidModelResponse
 from screenguide.detection import StubDetector
 from screenguide.grounding import NumberingGrounding
 from screenguide.model import StubProvider
+from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
-from screenguide.usage import JsonlUsageTracker, default_usage_log
+from screenguide.usage import JsonlUsageTracker, read_usage_log, summarize
 
 
 def format_step(step: Step) -> str:
@@ -31,17 +33,17 @@ def format_step(step: Step) -> str:
 
 
 def run(image: Path, goal: str) -> int:
-    session = GuideSession(
-        goal=goal,
-        capturer=FileCapturer(image),
-        detector=StubDetector(),
-        grounding=NumberingGrounding(),
-        provider=StubProvider(),
-        tracker=JsonlUsageTracker(default_usage_log()),
-    )
     try:
+        session = GuideSession(
+            goal=goal,
+            capturer=FileCapturer(image),
+            detector=StubDetector(),
+            grounding=NumberingGrounding(),
+            provider=StubProvider(),
+            tracker=JsonlUsageTracker(load_config().usage_log, load_pricing()),
+        )
         step = session.next_step()
-    except OSError as exc:
+    except (OSError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except InvalidModelResponse as exc:
@@ -51,12 +53,25 @@ def run(image: Path, goal: str) -> int:
     return 0
 
 
+def usage() -> int:
+    try:
+        records, malformed = read_usage_log(load_config().usage_log)
+    except (OSError, ConfigError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(summarize(records, malformed))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="screenguide")
     commands = parser.add_subparsers(dest="command", required=True)
     run_parser = commands.add_parser("run", help="produce one step for an image and a goal")
     run_parser.add_argument("--image", type=Path, required=True, help="image file to read")
     run_parser.add_argument("--goal", required=True, help="what the user wants to do")
+    commands.add_parser("usage", help="summarise usage by day, session, provider and model")
 
     args = parser.parse_args(argv)
+    if args.command == "usage":
+        return usage()
     return run(args.image, args.goal)

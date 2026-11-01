@@ -8,8 +8,9 @@ from screenguide.contract import InvalidModelResponse
 from screenguide.detection import BBox, StubDetector
 from screenguide.grounding import NumberingGrounding
 from screenguide.model import ModelReply, ModelRequest
+from screenguide.pricing import PricingTable
 from screenguide.session import GuideSession
-from screenguide.usage import JsonlUsageTracker, default_usage_log
+from screenguide.usage import JsonlUsageTracker
 
 
 class FixedProvider:
@@ -41,7 +42,7 @@ def make_session(image, usage_log, provider):
         detector=StubDetector(),
         grounding=NumberingGrounding(),
         provider=provider,
-        tracker=JsonlUsageTracker(usage_log),
+        tracker=JsonlUsageTracker(usage_log, PricingTable({})),
     )
 
 
@@ -61,6 +62,14 @@ def test_cli_crosses_every_layer_and_prints_the_step(image, usage_log, capsys):
     ]
 
 
+def test_tokens_the_provider_does_not_report_are_logged_as_null(image, usage_log):
+    make_session(image, usage_log, FixedProvider()).next_step()
+
+    record = read_records(usage_log)[0]
+    assert record["input_tokens"] is None
+    assert record["output_tokens"] is None
+
+
 def test_cli_appends_one_usage_record_per_run_with_unknowns_as_null(image, usage_log):
     args = ["run", "--image", str(image), "--goal", "Open settings"]
     main(args)
@@ -70,8 +79,8 @@ def test_cli_appends_one_usage_record_per_run_with_unknowns_as_null(image, usage
     assert len(records) == 2
     record = records[0]
     assert (record["provider"], record["model"]) == ("stub", "stub")
-    assert record["input_tokens"] is None
-    assert record["output_tokens"] is None
+    assert record["input_tokens"] == 1000
+    assert record["output_tokens"] == 100
     assert record["image_width"] is None
     assert record["image_height"] is None
     assert record["cost_usd"] is None
@@ -127,10 +136,3 @@ def test_invalid_reply_raises_and_is_still_recorded(image, usage_log, provider):
 
     assert len(read_records(usage_log)) == 1
     assert session.history == []
-
-
-def test_default_usage_log_lives_under_home(tmp_path, monkeypatch):
-    monkeypatch.delenv("SCREENGUIDE_USAGE_LOG")
-    monkeypatch.setenv("HOME", str(tmp_path))
-
-    assert default_usage_log() == tmp_path / ".local" / "share" / "screenguide" / "usage"
