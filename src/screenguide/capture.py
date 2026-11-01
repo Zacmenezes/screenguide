@@ -20,6 +20,8 @@ from jeepney import (
 )
 from jeepney.io.blocking import Proxy, open_dbus_connection
 
+from screenguide.monitors import MonitorError, crop_to_monitor, find_monitor, read_monitors
+
 logger = logging.getLogger(__name__)
 
 PORTAL_NAME = "org.freedesktop.portal.Desktop"
@@ -65,18 +67,25 @@ class PortalCapturer:
     """Captures through `org.freedesktop.portal.Screenshot`.
 
     The portal hands over a file, so the capture is read into memory and that file is removed.
-    With several monitors the image is what the portal returns: the whole desktop as one image.
+    The portal returns the whole desktop as one image. With a monitor chosen, that image is cropped
+    to it before anything else sees or saves it; with none, the whole desktop is the capture.
     """
 
     def __init__(
         self,
         save_dir: Path | None = None,
         response_timeout: float = RESPONSE_TIMEOUT_SECONDS,
+        monitor: str | None = None,
     ) -> None:
         self._save_dir = save_dir
         self._response_timeout = response_timeout
+        self._monitor = monitor
 
     def capture(self) -> Screenshot:
+        # Checked first, so a wrong name or a missing layout API never takes a screenshot.
+        monitors = read_monitors() if self._monitor else []
+        chosen = find_monitor(self._monitor, monitors) if self._monitor else None
+
         path = _path_from_uri(_request_screenshot(self._response_timeout))
         try:
             data = path.read_bytes()
@@ -87,8 +96,16 @@ class PortalCapturer:
         if not data:
             raise CaptureError(f"the portal returned an empty screenshot: {path}")
 
+        suffix = path.suffix
+        if chosen is not None:
+            # The answer to a permission dialog can take long enough for the layout to change.
+            if read_monitors() != monitors:
+                raise MonitorError("the monitor layout changed during the capture; try again")
+            data = crop_to_monitor(data, chosen, monitors)
+            suffix = ".png"
+
         if self._save_dir is not None:
-            _save(data, self._save_dir, path.suffix)
+            _save(data, self._save_dir, suffix)
         width, height = _png_size(data)
         return Screenshot(data=data, width=width, height=height)
 
