@@ -169,7 +169,7 @@ def test_cli_capture_records_the_measured_image(bus, portal_file, usage_log, cap
         assert main(["run", "--capture", "--goal", "Open settings"]) == 0
 
     assert '"image_width": 800' in usage_log.read_text()
-    assert "target_label: Settings" in capsys.readouterr().out
+    assert "target_label: File" in capsys.readouterr().out
 
 
 def test_cli_reports_denial_without_recording_usage(bus, usage_log, capsys):

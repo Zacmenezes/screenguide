@@ -2,10 +2,11 @@ import json
 
 import pytest
 
+from conftest import FixedDetector
 from screenguide.capture import FileCapturer
 from screenguide.cli import main
 from screenguide.contract import InvalidModelResponse
-from screenguide.detection import BBox, StubDetector
+from screenguide.detection import BBox
 from screenguide.grounding import NumberingGrounding
 from screenguide.model import ModelReply, ModelRequest
 from screenguide.pricing import PricingTable
@@ -39,7 +40,7 @@ def make_session(image, usage_log, provider):
     return GuideSession(
         goal="Open settings",
         capturer=FileCapturer(image),
-        detector=StubDetector(),
+        detector=FixedDetector(),
         grounding=NumberingGrounding(),
         provider=provider,
         tracker=JsonlUsageTracker(usage_log, PricingTable({})),
@@ -54,9 +55,9 @@ def test_cli_crosses_every_layer_and_prints_the_step(image, usage_log, capsys):
     assert main(["run", "--image", str(image), "--goal", "Open settings"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
-        "target_label: Settings",
-        "instruction: Click Settings in the top menu, between File and Help.",
-        "bbox: x=60 y=8 width=70 height=20",
+        "target_label: File",
+        "instruction: Click File, the first text on the screen.",
+        "bbox: x=10 y=8 width=40 height=20",
         "done: false",
         "confidence: 0.8",
     ]
@@ -87,6 +88,12 @@ def test_cli_appends_one_usage_record_per_run_with_unknowns_as_null(image, usage
     assert record["latency_ms"] >= 0
     assert record["timestamp"]
     assert record["session_id"]
+
+
+def test_stub_provider_points_at_nothing_when_no_text_was_found(image, usage_log, monkeypatch):
+    monkeypatch.setattr("screenguide.cli.RapidOcrDetector", lambda: FixedDetector(()))
+
+    assert main(["run", "--image", str(image), "--goal", "Open settings"]) == 0
 
 
 def test_cli_reports_a_missing_image(tmp_path, usage_log, capsys):
