@@ -3,7 +3,7 @@
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -51,6 +51,14 @@ class GuideSession:
         self._provider = provider
         self._tracker = tracker
         self._notify = notify
+
+    def steps(self) -> Iterator[Step]:
+        """Yield steps until one is `done`. Nothing is captured until the caller asks for a step."""
+        while True:
+            step = self.next_step()
+            yield step
+            if step.done:
+                return
 
     def next_step(self) -> Step:
         """Produce one step from one capture.

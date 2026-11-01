@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
@@ -15,6 +15,8 @@ from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
 from screenguide.usage import JsonlUsageTracker, read_usage_log, summarize
+
+NEXT_PROMPT = "\nDo this step, then press Enter for the next one (q to quit): "
 
 
 def format_step(step: Step) -> str:
@@ -34,6 +36,44 @@ def format_step(step: Step) -> str:
 
 
 def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
+    def one_step(session: GuideSession) -> int:
+        print(format_step(session.next_step()))
+        return 0
+
+    return _with_session(goal, image, monitor, one_step)
+
+
+def guide(goal: str, monitor: str | None = None) -> int:
+    def loop(session: GuideSession) -> int:
+        print(f"session: {session.session_id[:8]}")
+        for number, step in enumerate(session.steps(), 1):
+            print(f"\nStep {number}\n{format_step(step)}")
+            if not step.done and not _wait_for_next():
+                break
+        return 0
+
+    try:
+        return _with_session(goal, None, monitor, loop)
+    except KeyboardInterrupt:
+        print()
+        return 130
+
+
+def _wait_for_next() -> bool:
+    """Whether the user asked for another step. Closed input counts as quitting."""
+    try:
+        return input(NEXT_PROMPT).strip().lower() != "q"
+    except EOFError:
+        return False
+
+
+def _with_session(
+    goal: str,
+    image: Path | None,
+    monitor: str | None,
+    action: Callable[[GuideSession], int],
+) -> int:
+    """Build a session for the real screen, or for `image` if given, and report what fails."""
     try:
         config = load_config()
         capturer: ScreenCapturer = (
@@ -50,7 +90,7 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
             tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
             notify=lambda message: print(message, file=sys.stderr),
         )
-        step = session.next_step()
+        return action(session)
     except (
         OSError,
         ConfigError,
@@ -72,8 +112,6 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(format_step(step))
-    return 0
 
 
 def detect(image: Path, output: Path) -> int:
@@ -123,6 +161,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--capture", action="store_true", help="capture the real screen")
     run_parser.add_argument("--goal", required=True, help="what the user wants to do")
     run_parser.add_argument("--monitor", help="connector name of the monitor to capture")
+    guide_parser = commands.add_parser("guide", help="guide a task step by step on the real screen")
+    guide_parser.add_argument("--goal", required=True, help="what the user wants to do")
+    guide_parser.add_argument("--monitor", help="connector name of the monitor to capture")
     detect_parser = commands.add_parser("detect", help="find the text elements in an image")
     detect_parser.add_argument("--image", type=Path, required=True, help="image file to read")
     detect_parser.add_argument(
@@ -132,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser("monitors", help="list the monitors by connector name")
 
     args = parser.parse_args(argv)
+    if args.command == "guide":
+        return guide(args.goal, args.monitor)
     if args.command == "detect":
         return detect(args.image, args.output)
     if args.command == "usage":
