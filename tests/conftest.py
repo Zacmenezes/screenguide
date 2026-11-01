@@ -2,6 +2,7 @@ import shutil
 import subprocess
 
 import pytest
+from PIL import Image
 
 from screenguide.detection import BBox, Element
 
@@ -67,7 +68,7 @@ def usage_log(tmp_path, monkeypatch):
 @pytest.fixture
 def image(tmp_path):
     path = tmp_path / "screen.png"
-    path.write_bytes(b"not decoded by the stub")
+    Image.new("RGB", (200, 100), "white").save(path)
     return path
 
 

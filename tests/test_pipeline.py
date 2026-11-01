@@ -7,7 +7,7 @@ from screenguide.capture import FileCapturer
 from screenguide.cli import main
 from screenguide.contract import InvalidModelResponse
 from screenguide.detection import BBox
-from screenguide.grounding import NumberingGrounding
+from screenguide.grounding import SetOfMarkGrounding
 from screenguide.model import ModelReply, ModelRequest
 from screenguide.pricing import PricingTable
 from screenguide.session import GuideSession
@@ -41,7 +41,7 @@ def make_session(image, usage_log, provider):
         goal="Open settings",
         capturer=FileCapturer(image),
         detector=FixedDetector(),
-        grounding=NumberingGrounding(),
+        grounding=SetOfMarkGrounding(),
         provider=provider,
         tracker=JsonlUsageTracker(usage_log, PricingTable({})),
     )
@@ -82,8 +82,8 @@ def test_cli_appends_one_usage_record_per_run_with_unknowns_as_null(image, usage
     assert (record["provider"], record["model"]) == ("stub", "stub")
     assert record["input_tokens"] == 1000
     assert record["output_tokens"] == 100
-    assert record["image_width"] is None
-    assert record["image_height"] is None
+    assert record["image_width"] == 200
+    assert record["image_height"] == 100
     assert record["cost_usd"] is None
     assert record["latency_ms"] >= 0
     assert record["timestamp"]
@@ -112,7 +112,8 @@ def test_session_sends_goal_and_numbered_boxes_and_resolves_the_chosen_one(image
     request = provider.requests[0]
     assert request.goal == "Open settings"
     assert list(request.marked.elements) == [1, 2, 3]
-    assert request.marked.image.data == image.read_bytes()
+    assert request.marked.image.data != image.read_bytes()
+    assert "2: Settings" in request.marked.id_list
     assert step.bbox == BBox(x=140, y=8, width=40, height=20)
     assert read_records(usage_log)[0]["input_tokens"] == 120
 

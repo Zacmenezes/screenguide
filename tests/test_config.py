@@ -67,3 +67,21 @@ def test_cli_reports_an_unusable_config_file(config_file, image, capsys):
     assert main(["usage"]) == 1
     assert main(["run", "--image", str(image), "--goal", "Open settings"]) == 1
     assert "config.toml" in capsys.readouterr().err
+
+
+def test_image_long_edge_comes_from_file_or_environment(config_file, monkeypatch):
+    assert load_config().image_long_edge is None
+
+    config_file.write_text("image_long_edge = 1568\n")
+    assert load_config().image_long_edge == 1568
+
+    monkeypatch.setenv("SCREENGUIDE_IMAGE_LONG_EDGE", "1000")
+    assert load_config().image_long_edge == 1000
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "1.5", '"big"', "true"])
+def test_image_long_edge_must_be_a_positive_integer(config_file, value):
+    config_file.write_text(f"image_long_edge = {value}\n")
+
+    with pytest.raises(ConfigError, match="image_long_edge"):
+        load_config()

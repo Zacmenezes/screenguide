@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from screenguide.capture import ScreenCapturer
 from screenguide.contract import InvalidModelResponse, parse_model_response
 from screenguide.detection import BBox, ElementDetector
-from screenguide.grounding import GroundingStrategy
+from screenguide.grounding import GroundingStrategy, UnknownElementError
 from screenguide.model import ModelProvider, ModelRequest
 from screenguide.usage import UsageRecord, UsageTracker
 
@@ -73,9 +73,10 @@ class GuideSession:
         response = parse_model_response(reply.text)
         bbox = None
         if response.element_id is not None:
-            bbox = self._grounding.resolve(marked, response.element_id)
-            if bbox is None:
-                raise InvalidModelResponse(f"no box is numbered {response.element_id}")
+            try:
+                bbox = self._grounding.resolve(marked, response.element_id)
+            except UnknownElementError as exc:
+                raise InvalidModelResponse(str(exc)) from exc
 
         self.history.append(response.instruction)
         logger.info(

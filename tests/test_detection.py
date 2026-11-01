@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from screenguide.capture import Screenshot
 from screenguide.cli import main
-from screenguide.detection import BBox, DetectionError, Element, RapidOcrDetector, annotate
+from screenguide.detection import BBox, DetectionError, Element, RapidOcrDetector
 
 LABELS = {"File": (40, 30), "Save as": (200, 30), "Preferences": (420, 30), "Help": (40, 150)}
 
@@ -145,17 +145,6 @@ def test_unreadable_image_gives_a_clear_error():
         RapidOcrDetector(engine=FakeEngine()).detect(Screenshot(data=b"not an image"))
 
 
-def test_annotate_keeps_the_size_and_draws_on_the_image():
-    screenshot = blank_screenshot()
-
-    annotated = Image.open(
-        io.BytesIO(annotate(screenshot, [Element(1, "File", BBox(10, 20, 50, 20), 0.9)]))
-    ).convert("RGB")
-
-    assert annotated.size == (800, 600)
-    assert annotated.getpixel((10, 30)) != (0, 0, 0)
-
-
 def test_detect_command_reports_a_missing_engine(tmp_path, monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "rapidocr", None)
     image = tmp_path / "screen.png"
@@ -184,10 +173,10 @@ def test_real_engine_finds_each_label_where_it_was_drawn(background, foreground)
         assert elements[label].confidence >= 0.5
 
 
-def test_detect_command_writes_the_annotated_image(tmp_path, capsys):
+def test_detect_command_writes_the_marked_image(tmp_path, capsys):
     pytest.importorskip("rapidocr")
     pytest.importorskip("onnxruntime")
-    image, output = tmp_path / "screen.png", tmp_path / "annotated.png"
+    image, output = tmp_path / "screen.png", tmp_path / "marked.png"
     image.write_bytes(render("#1e1e22", "#d0d0d0")[0])
 
     assert main(["detect", "--image", str(image), "--output", str(output)]) == 0
