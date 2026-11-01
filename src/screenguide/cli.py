@@ -7,10 +7,10 @@ from pathlib import Path
 
 from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
 from screenguide.config import ConfigError, load_config
-from screenguide.contract import InvalidModelResponse
+from screenguide.contract import InvalidModelResponse, ModelRefusal
 from screenguide.detection import DetectionError, RapidOcrDetector
 from screenguide.grounding import SetOfMarkGrounding
-from screenguide.model import StubProvider
+from screenguide.model import AnthropicProvider, ModelProviderError
 from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
@@ -46,15 +46,31 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
             capturer=capturer,
             detector=RapidOcrDetector(),
             grounding=SetOfMarkGrounding(config.image_long_edge),
-            provider=StubProvider(),
+            provider=AnthropicProvider(config.model, config.effort),
             tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
+            notify=lambda message: print(message, file=sys.stderr),
         )
         step = session.next_step()
-    except (OSError, ConfigError, CaptureError, MonitorError, DetectionError) as exc:
+    except (
+        OSError,
+        ConfigError,
+        CaptureError,
+        MonitorError,
+        DetectionError,
+        ModelProviderError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except InvalidModelResponse as exc:
-        print(f"error: invalid model response: {exc}", file=sys.stderr)
+        print(f"error: invalid model response after one retry: {exc}", file=sys.stderr)
+        return 1
+    except ModelRefusal as exc:
+        print(
+            f"The model declined this request: {exc}\n"
+            "Try another model: set `model` in ~/.config/screenguide/config.toml "
+            "or SCREENGUIDE_MODEL.",
+            file=sys.stderr,
+        )
         return 1
     print(format_step(step))
     return 0

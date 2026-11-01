@@ -1,5 +1,4 @@
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -38,8 +37,9 @@ def test_missing_pricing_file_is_an_empty_table(tmp_path):
     assert load_pricing(tmp_path / "absent.toml").cost("anthropic", "m", 1, 1) is None
 
 
-def test_example_is_a_valid_table_with_the_stub():
-    assert load_pricing(EXAMPLE).cost("stub", "stub", 1_000_000, 0) == pytest.approx(1.0)
+def test_example_is_a_valid_table_with_the_default_model():
+    cost = load_pricing(EXAMPLE).cost("anthropic", "claude-haiku-5-5", 1_000_000, 0)
+    assert cost == pytest.approx(0.1)
 
 
 @pytest.mark.parametrize(
@@ -64,7 +64,7 @@ def test_malformed_table_is_rejected(tmp_path, content):
 def test_cli_run_prices_the_record_from_the_user_table(home, image, usage_log):
     pricing = home / ".config" / "screenguide" / "pricing.toml"
     pricing.parent.mkdir(parents=True)
-    shutil.copy(EXAMPLE, pricing)
+    pricing.write_text('[stub."stub"]\ninput_usd_per_mtok = 1.0\noutput_usd_per_mtok = 5.0\n')
 
     assert main(["run", "--image", str(image), "--goal", "Open settings"]) == 0
 

@@ -334,6 +334,7 @@ def test_monitor_comes_from_file_or_environment(home, monkeypatch):
 def test_run_option_overrides_configuration(monkeypatch, tmp_path, usage_log, capsys):
     Requests(monkeypatch, tmp_path)
     monkeypatch.setenv("SCREENGUIDE_MONITOR", "HDMI-9")
+    monkeypatch.setenv("SCREENGUIDE_IMAGE_LONG_EDGE", "4000")  # Keeps the monitor's own width.
 
     assert main(["run", "--capture", "--monitor", "DP-4", "--goal", "Open settings"]) == 0
 

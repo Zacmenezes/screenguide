@@ -3,9 +3,27 @@
 import json
 from dataclasses import dataclass
 
+# Numeric bounds are left out because structured outputs reject them; the parser checks them.
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "element_id": {"type": ["integer", "null"]},
+        "target_label": {"type": ["string", "null"]},
+        "instruction": {"type": "string"},
+        "done": {"type": "boolean"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["element_id", "target_label", "instruction", "done", "confidence"],
+    "additionalProperties": False,
+}
+
 
 class InvalidModelResponse(ValueError):
     """The model's reply does not honour the response contract."""
+
+
+class ModelRefusal(Exception):
+    """The model declined the request. Retrying the same request will not help."""
 
 
 @dataclass(frozen=True)

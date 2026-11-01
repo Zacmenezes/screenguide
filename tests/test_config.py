@@ -70,13 +70,27 @@ def test_cli_reports_an_unusable_config_file(config_file, image, capsys):
 
 
 def test_image_long_edge_comes_from_file_or_environment(config_file, monkeypatch):
-    assert load_config().image_long_edge is None
+    assert load_config().image_long_edge == 2576
 
     config_file.write_text("image_long_edge = 1568\n")
     assert load_config().image_long_edge == 1568
 
     monkeypatch.setenv("SCREENGUIDE_IMAGE_LONG_EDGE", "1000")
     assert load_config().image_long_edge == 1000
+
+
+def test_model_defaults_to_haiku_and_effort_to_the_models_own(config_file):
+    assert load_config().model == "claude-haiku-5-5"
+    assert load_config().effort is None
+
+
+def test_model_and_effort_come_from_file_or_environment(config_file, monkeypatch):
+    config_file.write_text('model = "claude-sonnet-5-5"\neffort = "low"\n')
+    assert (load_config().model, load_config().effort) == ("claude-sonnet-5-5", "low")
+
+    monkeypatch.setenv("SCREENGUIDE_MODEL", "claude-opus-5-5")
+    monkeypatch.setenv("SCREENGUIDE_EFFORT", "high")
+    assert (load_config().model, load_config().effort) == ("claude-opus-5-5", "high")
 
 
 @pytest.mark.parametrize("value", ["0", "-5", "1.5", '"big"', "true"])
