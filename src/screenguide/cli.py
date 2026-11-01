@@ -8,8 +8,8 @@ from pathlib import Path
 from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
 from screenguide.config import ConfigError, load_config
 from screenguide.contract import InvalidModelResponse
-from screenguide.detection import DetectionError, RapidOcrDetector, annotate
-from screenguide.grounding import NumberingGrounding
+from screenguide.detection import DetectionError, RapidOcrDetector
+from screenguide.grounding import SetOfMarkGrounding
 from screenguide.model import StubProvider
 from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
@@ -45,7 +45,7 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
             goal=goal,
             capturer=capturer,
             detector=RapidOcrDetector(),
-            grounding=NumberingGrounding(),
+            grounding=SetOfMarkGrounding(config.image_long_edge),
             provider=StubProvider(),
             tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
         )
@@ -62,10 +62,12 @@ def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
 
 def detect(image: Path, output: Path) -> int:
     try:
+        config = load_config()
         screenshot = FileCapturer(image).capture()
         elements = RapidOcrDetector().detect(screenshot)
-        output.write_bytes(annotate(screenshot, elements))
-    except (OSError, DetectionError) as exc:
+        marked = SetOfMarkGrounding(config.image_long_edge).mark(screenshot, elements)
+        output.write_bytes(marked.image.data)
+    except (OSError, ConfigError, DetectionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     for element in elements:
@@ -108,7 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     detect_parser = commands.add_parser("detect", help="find the text elements in an image")
     detect_parser.add_argument("--image", type=Path, required=True, help="image file to read")
     detect_parser.add_argument(
-        "--output", type=Path, required=True, help="where to write the annotated PNG"
+        "--output", type=Path, required=True, help="where to write the marked PNG"
     )
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")

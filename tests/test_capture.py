@@ -14,6 +14,7 @@ from jeepney import (
     new_signal,
 )
 from jeepney.io.blocking import Proxy, open_dbus_connection
+from PIL import Image
 
 from screenguide.capture import CaptureError, PortalCapturer
 from screenguide.cli import main
@@ -165,6 +166,8 @@ def test_missing_or_empty_file_gives_a_clear_error(bus, portal_file, tmp_path):
 
 
 def test_cli_capture_records_the_measured_image(bus, portal_file, usage_log, capsys):
+    Image.new("RGB", (800, 600)).save(portal_file, format="PNG")
+
     with FakePortal(results=uri_result(portal_file.as_uri())):
         assert main(["run", "--capture", "--goal", "Open settings"]) == 0
 

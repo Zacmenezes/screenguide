@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from PIL import Image, ImageDraw, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 from screenguide.capture import Screenshot
 
@@ -57,7 +57,7 @@ class RapidOcrDetector:
         self._engine = engine
 
     def detect(self, screenshot: Screenshot) -> list[Element]:
-        image = _decode(screenshot)
+        image = decode_image(screenshot)
         engine = self._load_engine()
         started = time.perf_counter()
         try:
@@ -99,22 +99,7 @@ class RapidOcrDetector:
         return self._engine
 
 
-def annotate(screenshot: Screenshot, elements: list[Element]) -> bytes:
-    """Return a PNG of the screenshot with each element's box and id drawn on it."""
-    image = _decode(screenshot)
-    draw = ImageDraw.Draw(image)
-    for element in elements:
-        box = element.bbox
-        draw.rectangle(
-            (box.x, box.y, box.x + box.width, box.y + box.height), outline=(255, 0, 80), width=2
-        )
-        draw.text((box.x, max(box.y - 11, 0)), str(element.id), fill=(255, 0, 80))
-    output = io.BytesIO()
-    image.save(output, format="PNG")
-    return output.getvalue()
-
-
-def _decode(screenshot: Screenshot) -> Image.Image:
+def decode_image(screenshot: Screenshot) -> Image.Image:
     try:
         return Image.open(io.BytesIO(screenshot.data)).convert("RGB")
     except (UnidentifiedImageError, OSError, ValueError) as exc:

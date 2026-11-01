@@ -31,6 +31,7 @@ class Config:
     usage_log: Path
     screenshot_dir: Path | None = None  # Screenshots stay in memory unless this is set.
     monitor: str | None = None  # Connector name. The capture is the whole desktop unless set.
+    image_long_edge: int | None = None  # Long edge of the image sent to the model, in pixels.
 
 
 def load_config() -> Config:
@@ -42,12 +43,26 @@ def load_config() -> Config:
         usage_log=usage_log or Path.home() / ".local" / "share" / "screenguide" / "usage",
         screenshot_dir=_path_setting(path, file_values, "screenshot_dir"),
         monitor=_string_setting(path, file_values, "monitor"),
+        image_long_edge=_positive_int_setting(path, file_values, "image_long_edge"),
     )
 
 
 def _path_setting(path: Path, file_values: dict[str, Any], key: str) -> Path | None:
     value = _string_setting(path, file_values, key)
     return None if value is None else Path(value).expanduser()
+
+
+def _positive_int_setting(path: Path, file_values: dict[str, Any], key: str) -> int | None:
+    value = os.environ.get(f"SCREENGUIDE_{key.upper()}") or file_values.get(key)
+    if value is None:
+        return None
+    try:
+        number = int(value) if isinstance(value, str) else value
+    except ValueError:
+        number = None
+    if type(number) is not int or number <= 0:
+        raise ConfigError(f"{path}: {key} must be a positive integer")
+    return number
 
 
 def _string_setting(path: Path, file_values: dict[str, Any], key: str) -> str | None:
