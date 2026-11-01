@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 
@@ -5,6 +6,7 @@ import pytest
 from PIL import Image
 
 from screenguide.detection import BBox, Element
+from screenguide.model import ModelReply
 
 ELEMENTS = (
     Element(1, "File", BBox(x=10, y=8, width=40, height=20), 0.9),
@@ -19,6 +21,36 @@ class FixedDetector:
 
     def detect(self, screenshot):
         return self._elements
+
+
+class StubProvider:
+    """Stands in for the real provider in CLI tests: picks the first box, with made-up tokens."""
+
+    name = "stub"
+    external = False
+
+    def __init__(self, model="stub", effort=None):
+        self.model = model
+
+    def complete(self, request):
+        elements = request.marked.elements
+        element_id = min(elements, default=None)
+        label = elements[element_id].text if element_id is not None else None
+        return ModelReply(
+            text=json.dumps(
+                {
+                    "element_id": element_id,
+                    "target_label": label,
+                    "instruction": f"Click {label}, the first text on the screen."
+                    if label
+                    else "No text was found on the screen.",
+                    "done": False,
+                    "confidence": 0.8,
+                }
+            ),
+            input_tokens=1000,
+            output_tokens=100,
+        )
 
 
 BUS_CONFIG = """<busconfig>
@@ -70,6 +102,12 @@ def image(tmp_path):
     path = tmp_path / "screen.png"
     Image.new("RGB", (200, 100), "white").save(path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def stub_provider(monkeypatch):
+    """CLI tests never reach the network; `test_model.py` tests the real provider's mapping."""
+    monkeypatch.setattr("screenguide.cli.AnthropicProvider", lambda model, effort: StubProvider())
 
 
 @pytest.fixture(autouse=True)

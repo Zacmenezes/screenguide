@@ -24,6 +24,10 @@ class UsageRecord:
     image_height: int | None
     latency_ms: float
     cost_usd: float | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    image_tokens: int | None = None
+    attempt: int = 1  # 1 for the first call of a step, 2 for its retry.
 
 
 class UsageTracker(Protocol):
@@ -67,7 +71,13 @@ def read_usage_log(path: Path) -> tuple[list[UsageRecord], int]:
 def _parse_record(line: str) -> UsageRecord:
     record = UsageRecord(**json.loads(line))
     datetime.fromisoformat(record.timestamp)
-    for count in (record.input_tokens, record.output_tokens):
+    for count in (
+        record.input_tokens,
+        record.output_tokens,
+        record.cache_creation_input_tokens,
+        record.cache_read_input_tokens,
+        record.image_tokens,
+    ):
         if count is not None and type(count) is not int:
             raise ValueError("token counts must be integers or null")
     if record.cost_usd is not None and type(record.cost_usd) not in (int, float):

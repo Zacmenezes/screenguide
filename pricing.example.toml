@@ -20,8 +20,3 @@ output_usd_per_mtok = 10.00
 [anthropic."claude-haiku-5-5"]
 input_usd_per_mtok = 0.10
 output_usd_per_mtok = 0.50
-
-# The stub provider costs nothing to run. This made-up price only exercises the cost path.
-[stub."stub"]
-input_usd_per_mtok = 1.00
-output_usd_per_mtok = 5.00

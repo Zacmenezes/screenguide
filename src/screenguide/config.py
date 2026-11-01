@@ -11,6 +11,11 @@ class ConfigError(ValueError):
     """A configuration file exists but cannot be used."""
 
 
+# Claude 4.7 and later, Haiku 5.5 included, accept 2576 px on the long edge, per the Vision docs.
+DEFAULT_IMAGE_LONG_EDGE = 2576
+DEFAULT_MODEL = "claude-haiku-5-5"
+
+
 def config_dir() -> Path:
     return Path.home() / ".config" / "screenguide"
 
@@ -31,7 +36,9 @@ class Config:
     usage_log: Path
     screenshot_dir: Path | None = None  # Screenshots stay in memory unless this is set.
     monitor: str | None = None  # Connector name. The capture is the whole desktop unless set.
-    image_long_edge: int | None = None  # Long edge of the image sent to the model, in pixels.
+    image_long_edge: int = DEFAULT_IMAGE_LONG_EDGE  # Of the image sent to the model, in pixels.
+    model: str = DEFAULT_MODEL
+    effort: str | None = None  # `output_config.effort`. The model's own default unless set.
 
 
 def load_config() -> Config:
@@ -43,7 +50,10 @@ def load_config() -> Config:
         usage_log=usage_log or Path.home() / ".local" / "share" / "screenguide" / "usage",
         screenshot_dir=_path_setting(path, file_values, "screenshot_dir"),
         monitor=_string_setting(path, file_values, "monitor"),
-        image_long_edge=_positive_int_setting(path, file_values, "image_long_edge"),
+        image_long_edge=_positive_int_setting(path, file_values, "image_long_edge")
+        or DEFAULT_IMAGE_LONG_EDGE,
+        model=_string_setting(path, file_values, "model") or DEFAULT_MODEL,
+        effort=_string_setting(path, file_values, "effort"),
     )
 
 
