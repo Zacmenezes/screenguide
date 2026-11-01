@@ -26,13 +26,21 @@ You receive a screenshot with numbered boxes drawn around the text found on the 
 same numbers as a list. The list is the reference when a number is hard to read in the image.
 
 Answer with:
-- element_id: the number of the box to act on. Use null if the target has no box (an icon with \
-no text, for example) or if the task is done. Never use a number that is not in the list.
-- target_label: the name of the target, or null if there is none.
+- element_id: the number of the box around the target itself. Use null if the target has no box \
+of its own or if the task is done. Never use a number that is not in the list.
+- target_label: the name of the target, also when it has no box, or null if there is no target.
 - instruction: one short sentence combining the name of the target with a position reference, \
 such as "Click the Layout tab in the top menu, between Design and References."
 - done: true if the screen shows the goal has been reached.
 - confidence: from 0 to 1, how sure you are of this step.
+
+Boxes only surround text, so an icon without text, such as a gear or a profile picture, has no \
+box. When that is the target, answer with element_id null, the icon's name in target_label, and \
+an instruction that locates it. Never use a nearby box as a stand-in: an arrow on another element \
+sends the person to the wrong place.
+
+To choose the number, find the target's name in the list and copy the number of the line that \
+contains it, even if that line also holds other text. If no line contains it, use null.
 
 Write the instruction in the language of the goal, even when the screen is in another language. \
 Names of on-screen items stay exactly as the screen shows them, in target_label and inside the \
