@@ -11,6 +11,7 @@ from screenguide.contract import InvalidModelResponse
 from screenguide.detection import StubDetector
 from screenguide.grounding import NumberingGrounding
 from screenguide.model import StubProvider
+from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
 from screenguide.usage import JsonlUsageTracker, read_usage_log, summarize
@@ -32,11 +33,13 @@ def format_step(step: Step) -> str:
     )
 
 
-def run(image: Path | None, goal: str) -> int:
+def run(image: Path | None, goal: str, monitor: str | None = None) -> int:
     try:
         config = load_config()
         capturer: ScreenCapturer = (
-            FileCapturer(image) if image else PortalCapturer(save_dir=config.screenshot_dir)
+            FileCapturer(image)
+            if image
+            else PortalCapturer(save_dir=config.screenshot_dir, monitor=monitor or config.monitor)
         )
         session = GuideSession(
             goal=goal,
@@ -47,7 +50,7 @@ def run(image: Path | None, goal: str) -> int:
             tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
         )
         step = session.next_step()
-    except (OSError, ConfigError, CaptureError) as exc:
+    except (OSError, ConfigError, CaptureError, MonitorError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except InvalidModelResponse as exc:
@@ -67,6 +70,15 @@ def usage() -> int:
     return 0
 
 
+def monitors() -> int:
+    try:
+        print(format_monitors(read_monitors()))
+    except MonitorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="screenguide")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -75,9 +87,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--image", type=Path, help="image file to read")
     source.add_argument("--capture", action="store_true", help="capture the real screen")
     run_parser.add_argument("--goal", required=True, help="what the user wants to do")
+    run_parser.add_argument("--monitor", help="connector name of the monitor to capture")
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
+    commands.add_parser("monitors", help="list the monitors by connector name")
 
     args = parser.parse_args(argv)
     if args.command == "usage":
         return usage()
-    return run(args.image, args.goal)
+    if args.command == "monitors":
+        return monitors()
+    if args.image and args.monitor:
+        run_parser.error("--monitor applies only to --capture")
+    return run(args.image, args.goal, args.monitor)

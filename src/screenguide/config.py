@@ -30,6 +30,7 @@ def load_toml(path: Path) -> dict[str, Any]:
 class Config:
     usage_log: Path
     screenshot_dir: Path | None = None  # Screenshots stay in memory unless this is set.
+    monitor: str | None = None  # Connector name. The capture is the whole desktop unless set.
 
 
 def load_config() -> Config:
@@ -40,13 +41,19 @@ def load_config() -> Config:
     return Config(
         usage_log=usage_log or Path.home() / ".local" / "share" / "screenguide" / "usage",
         screenshot_dir=_path_setting(path, file_values, "screenshot_dir"),
+        monitor=_string_setting(path, file_values, "monitor"),
     )
 
 
 def _path_setting(path: Path, file_values: dict[str, Any], key: str) -> Path | None:
+    value = _string_setting(path, file_values, key)
+    return None if value is None else Path(value).expanduser()
+
+
+def _string_setting(path: Path, file_values: dict[str, Any], key: str) -> str | None:
     value = os.environ.get(f"SCREENGUIDE_{key.upper()}") or file_values.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
         raise ConfigError(f"{path}: {key} must be a string")
-    return Path(value).expanduser()
+    return value

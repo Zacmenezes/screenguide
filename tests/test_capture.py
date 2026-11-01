@@ -1,9 +1,7 @@
 """`PortalCapturer` against a fake portal on a private D-Bus daemon."""
 
-import shutil
 import stat
 import struct
-import subprocess
 import threading
 
 import pytest
@@ -21,35 +19,6 @@ from screenguide.capture import CaptureError, PortalCapturer
 from screenguide.cli import main
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + struct.pack(">II", 800, 600) + b"rest"
-
-
-BUS_CONFIG = """<busconfig>
-  <type>session</type>
-  <listen>unix:path={socket}</listen>
-  <policy context="default">
-    <allow send_destination="*" eavesdrop="true"/>
-    <allow eavesdrop="true"/>
-    <allow own="*"/>
-  </policy>
-</busconfig>"""
-
-
-@pytest.fixture
-def bus(monkeypatch, tmp_path):
-    """A private session bus. It has no service directories, so no real portal can start on it."""
-    if not shutil.which("dbus-daemon"):
-        pytest.skip("dbus-daemon is not installed")
-    config = tmp_path / "bus.conf"
-    config.write_text(BUS_CONFIG.format(socket=tmp_path / "bus"))
-    daemon = subprocess.Popen(
-        ["dbus-daemon", f"--config-file={config}", "--nofork", "--print-address"],
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", daemon.stdout.readline().strip())
-    yield
-    daemon.terminate()
-    daemon.wait()
 
 
 class FakePortal:

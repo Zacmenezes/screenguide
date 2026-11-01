@@ -9,7 +9,7 @@ description = "Step-by-step guidance for any task in the Linux desktop interface
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["jeepney>=0.8"]
+dependencies = ["jeepney>=0.8", "pillow>=10"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
