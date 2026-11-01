@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
+.env
+
+# Maintainer-only files, including the UI reference screenshot
+local/
+
+# Real screenshots in the evaluation dataset
+eval/images/
