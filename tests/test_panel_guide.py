@@ -523,6 +523,53 @@ def test_a_late_step_from_the_old_task_does_not_replace_the_new_one(usage_log):
     assert g.panel.windowOpacity() == 1.0
 
 
+class OneAtATime(Capturer):
+    """A portal that, like GNOME's, would leave a second request unanswered; this one counts it."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.inside = 0
+        self.overlaps = 0
+        self.entered = threading.Event()
+        self.hold = threading.Event()
+        self.hold.set()
+
+    def capture(self):
+        self.inside += 1
+        self.overlaps += self.inside > 1
+        self.entered.set()
+        self.hold.wait(5)
+        try:
+            return super().capture()
+        finally:
+            self.inside -= 1
+
+
+def test_captures_of_an_ended_task_and_the_next_one_take_turns(usage_log):
+    g = Guide(ByGoal({"Open settings": "File", "Change the theme": "Help"}), usage_log)
+    portal = OneAtATime(g.panel)
+    g.capturer = portal
+    g.start()
+    g.wait_for(State.STEP)
+    portal.entered.clear()
+    portal.hold.clear()
+
+    g.panel.next_button.click()
+    wait_until(portal.entered.is_set)
+    g.panel.new_task_button.click()
+    g.start("Change the theme")
+    deadline = time.monotonic() + 0.1
+    wait_until(lambda: time.monotonic() > deadline)
+    portal.hold.set()
+    g.wait_for(State.STEP)
+    let_late_results_arrive()
+
+    assert portal.overlaps == 0
+    assert portal.opacity_at_capture == [0.0, 0.0, 0.0]
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert g.panel.windowOpacity() == 1.0
+
+
 def test_a_late_error_from_the_old_task_is_not_shown(guide):
     g = guide(ModelProviderError("Anthropic API error 500: boom"))
     g.provider.release.clear()

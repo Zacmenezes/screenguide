@@ -52,6 +52,10 @@ class _Task:
 class _OffScreenCapturer:
     """On the worker thread: has the UI thread hide the window, captures, then brings it back.
 
+    Captures take turns through `turn`: the screenshot portal answers one request at a time, and on
+    GNOME a second one sent meanwhile goes unanswered until it times out. An ended task's worker can
+    still be running when the next task's starts, so two could otherwise overlap.
+
     Hiding means full transparency. On GNOME, unmapping the window instead (`hide()`) lost it: after
     a few hide/show cycles it stayed mapped and painted but the compositor no longer displayed it.
     """
@@ -60,25 +64,28 @@ class _OffScreenCapturer:
         self,
         inner: ScreenCapturer,
         task: _Task,
+        turn: threading.Lock,
         leave: Callable[[threading.Event], None],
         come_back: Callable[[], None],
     ) -> None:
         self._inner = inner
         self._task = task
+        self._turn = turn
         self._leave = leave
         self._come_back = come_back
 
     def capture(self) -> Screenshot:
-        # A discarded task sends no new screenshot anywhere.
-        if self._task.discarded.is_set():
-            raise TaskDiscarded
-        gone = threading.Event()
-        self._leave(gone)
-        gone.wait()
-        try:
-            return self._inner.capture()
-        finally:
-            self._come_back()
+        with self._turn:
+            # A discarded task sends no new screenshot anywhere.
+            if self._task.discarded.is_set():
+                raise TaskDiscarded
+            gone = threading.Event()
+            self._leave(gone)
+            gone.wait()
+            try:
+                return self._inner.capture()
+            finally:
+                self._come_back()
 
 
 class GuideController(QObject):
@@ -87,7 +94,8 @@ class GuideController(QObject):
     The worker thread reaches the panel only through these signals, which Qt delivers on the UI
     thread. Each carries the task it belongs to, and whatever belongs to a task that has ended is
     dropped. A task runs one worker at a time, because a new one starts only outside `THINKING`;
-    a discarded task's worker may still be finishing while the next task's runs.
+    a discarded task's worker may still be finishing while the next task's runs, so their captures
+    take turns.
     """
 
     _leave_screen = Signal(object)
@@ -102,8 +110,7 @@ class GuideController(QObject):
         self._panel = panel
         self._build_session = build_session
         self._task: _Task | None = None
-        # Captures in progress; the window stays invisible until the last one is over.
-        self._away = 0
+        self._capture_turn = threading.Lock()
         self._monitor_choice = panel.monitor_choice()
 
         self._leave_screen.connect(self._on_leave_screen)
@@ -166,7 +173,9 @@ class GuideController(QObject):
             self._failed.emit(task, f"unexpected error: {exc}")
 
     def _off_screen(self, capturer: ScreenCapturer, task: _Task) -> ScreenCapturer:
-        return _OffScreenCapturer(capturer, task, self._leave_screen.emit, self._come_back.emit)
+        return _OffScreenCapturer(
+            capturer, task, self._capture_turn, self._leave_screen.emit, self._come_back.emit
+        )
 
     def _chosen_monitor(self) -> MonitorChoice:
         """On the worker thread, during a capture: the choice read as the window left the screen."""
@@ -180,14 +189,11 @@ class GuideController(QObject):
             self._monitor_choice.connector,
             self._monitor_choice.follows_panel,
         )
-        self._away += 1
         self._panel.setWindowOpacity(0.0)
         QTimer.singleShot(LEAVE_SCREEN_MS, gone.set)
 
     def _on_come_back(self) -> None:
-        self._away -= 1
-        if self._away == 0:
-            self._panel.setWindowOpacity(1.0)
+        self._panel.setWindowOpacity(1.0)
 
     def _current(self, task: _Task) -> bool:
         if task is self._task:
