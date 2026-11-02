@@ -1,16 +1,20 @@
-"""`layer:ui`: the panel that shows the guide above the other windows."""
+"""`layer:ui`: the floating bar and the panel that shows the guide above the other windows."""
 
 import logging
 import math
 import os
 import signal
+from collections.abc import Callable
 from enum import Enum
 
 from PIL import Image
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
     QCloseEvent,
     QColor,
+    QFontDatabase,
     QImage,
     QMouseEvent,
     QMoveEvent,
@@ -19,13 +23,16 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QRegion,
+    QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -52,13 +59,6 @@ STYLE = f"""
     QLabel#status {{ color: {ACCENT}; font-size: 15px; font-weight: 600; }}
     QLabel#error {{ color: #fca5a5; }}
     QLabel#notice, QLabel#source {{ color: #a1a1aa; font-size: 12px; }}
-    QComboBox {{
-        color: #f4f4f5; background: rgba(255, 255, 255, 18);
-        border: 1px solid #52525b; border-radius: 8px; padding: 3px 8px; font-size: 12px;
-    }}
-    QComboBox QAbstractItemView {{
-        color: #f4f4f5; background: #18181b; selection-background-color: #3f3f46;
-    }}
     QLineEdit {{
         color: #f4f4f5; background: rgba(255, 255, 255, 18);
         border: 1px solid #52525b; border-radius: 8px; padding: 7px 10px;
@@ -70,11 +70,33 @@ STYLE = f"""
     QPushButton:hover {{ background: rgba(255, 255, 255, 25); }}
     QPushButton:disabled {{ color: #71717a; }}
     QPushButton#close {{ color: #d4d4d8; font-weight: 400; border-radius: 12px; padding: 0; }}
+    QPushButton#newTask {{ color: #d4d4d8; font-weight: 400; padding: 3px 10px; }}
+    QPushButton[bar="true"] {{
+        color: #f4f4f5; border: none; border-radius: 14px; padding: 5px 12px;
+    }}
+    QPushButton[bar="true"]:hover {{ background: rgba(255, 255, 255, 25); }}
+    QPushButton#guideMe {{ background: rgba(255, 255, 255, 30); }}
+    QPushButton#menu::menu-indicator {{ image: none; width: 0; }}
+    QMenu {{
+        color: #f4f4f5; background: #18181b; border: 1px solid #3f3f46; padding: 4px;
+    }}
+    QMenu::item {{ padding: 5px 22px 5px 22px; border-radius: 6px; }}
+    QMenu::item:selected {{ background: #3f3f46; }}
+    QMenu::item:disabled {{ color: #71717a; }}
+    QMenu::separator {{ height: 1px; background: #3f3f46; margin: 4px 6px; }}
 """
+USAGE_STYLE = """
+    QWidget { background: #18181b; }
+    QPlainTextEdit { color: #f4f4f5; border: none; }
+"""
+# Between the bar and the panel. Clicks there reach the window behind.
+BAR_GAP = 8
+# From the top of the monitor the window first opens on.
+TOP_OFFSET = 8
 
 
 class Pick(Enum):
-    """Selector entries that are not a single monitor."""
+    """Capture monitor entries that are not a single monitor."""
 
     FOLLOW_PANEL = "Follow panel"
     WHOLE_DESKTOP = "Whole desktop"
@@ -85,11 +107,35 @@ def monitor_label(monitor: Monitor) -> str:
     return f"{monitor.connector}  {monitor.display_name}".rstrip()
 
 
+class _Rounded(QWidget):
+    """A see-through backdrop with rounded corners; `radius=None` makes it a pill."""
+
+    def __init__(self, radius: float | None) -> None:
+        super().__init__()
+        self._radius = radius
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        radius = self.height() / 2 if self._radius is None else self._radius
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(BACKGROUND)
+        painter.drawRoundedRect(self.rect(), radius, radius)
+
+
 class StepPanel(QWidget):
-    """Shows what it is told and reports what the user does, leaving the rest to its owner."""
+    """The floating bar and, below it, the panel, in one window that stays on top.
+
+    Shows what it is told and reports what the user does, leaving the rest to its owner. The panel
+    folds away under the bar; folding it ends nothing.
+    """
 
     goal_submitted = Signal(str)
     next_requested = Signal()
+    # New Task or ×: the user is done with the current task.
+    task_ended = Signal()
+    usage_requested = Signal()
+    quit_requested = Signal()
     closed = Signal()
 
     def __init__(self, goal: str = "", monitor: str | None = None) -> None:
@@ -103,30 +149,57 @@ class StepPanel(QWidget):
         self.setStyleSheet(STYLE)
         self.setWindowTitle("screenguide")
         self.setFixedWidth(PANEL_WIDTH)
+        self._placed = False
+        self._usage_window: UsageWindow | None = None
+
+        # The menu's monitor entries are filled by `set_monitors`.
+        self._monitors: list[Monitor] = []
+        self._selection: Pick | str = monitor or Pick.FOLLOW_PANEL
+        self.monitor_menu = QMenu("Capture monitor")
+        self.monitor_menu.setEnabled(False)
+        self._monitor_group = QActionGroup(self)
+        self._monitor_group.triggered.connect(self._on_monitor_picked)
+        self.menu = QMenu()
+        self.menu.addMenu(self.monitor_menu)
+        self.usage_action = self.menu.addAction("Usage")
+        self.usage_action.triggered.connect(self.usage_requested)
+        self.menu.addSeparator()
+        self.quit_action = self.menu.addAction("Quit")
+        self.quit_action.triggered.connect(self.quit_requested)
+
+        self.guide_me_button = QPushButton("Guide me  +", objectName="guideMe")
+        self.guide_me_button.clicked.connect(self.unfold)
+        self.hide_button = QPushButton("Hide")
+        self.hide_button.clicked.connect(self.fold)
+        self.menu_button = QPushButton("⋮", objectName="menu")
+        self.menu_button.setToolTip("Menu")
+        self.menu_button.setMenu(self.menu)
+        for button in (self.guide_me_button, self.hide_button, self.menu_button):
+            button.setProperty("bar", True)
+        self.bar = _Rounded(radius=None)
+        bar = QHBoxLayout(self.bar)
+        bar.setContentsMargins(6, 5, 6, 5)
+        bar.setSpacing(4)
+        bar.addWidget(self.guide_me_button)
+        bar.addWidget(self.hide_button)
+        bar.addWidget(self.menu_button)
 
         self._close = QPushButton("×", objectName="close")
         self._close.setFixedSize(24, 24)
-        self._close.clicked.connect(self.close)
+        self._close.setToolTip("End the task and fold the panel")
+        self._close.clicked.connect(self._end_and_fold)
         self._goal = QLabel(goal, objectName="goal", wordWrap=True)
         self._goal.setTextFormat(Qt.TextFormat.PlainText)
+        self.new_task_button = QPushButton("New Task", objectName="newTask")
+        self.new_task_button.clicked.connect(self.task_ended)
         header = QHBoxLayout()
         header.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignTop)
         header.addWidget(self._goal, stretch=1)
+        header.addWidget(self.new_task_button, alignment=Qt.AlignmentFlag.AlignTop)
 
-        # Hidden until `set_monitors`: a panel that captures nothing has nothing to choose.
-        self._monitors: list[Monitor] = []
-        self.monitor_selector = QComboBox()
-        self.monitor_selector.setToolTip("Monitor to capture")
-        self.monitor_selector.currentIndexChanged.connect(self._show_capture_source)
         self.capture_source = QLabel(objectName="source")
         self.capture_source.setTextFormat(Qt.TextFormat.PlainText)
-        self._source_row = QWidget()
-        source_row = QHBoxLayout(self._source_row)
-        source_row.setContentsMargins(0, 0, 0, 0)
-        source_row.addWidget(self.capture_source, stretch=1)
-        source_row.addWidget(self.monitor_selector)
-        self._source_row.hide()
-        self._selection: Pick | str = monitor or Pick.FOLLOW_PANEL
+        self.capture_source.hide()
 
         self.goal_input = QLineEdit(placeholderText="What do you want to do?")
         self.goal_input.returnPressed.connect(self._submit_goal)
@@ -151,37 +224,61 @@ class StepPanel(QWidget):
         self.next_button = QPushButton("Next step")
         self.next_button.clicked.connect(self.next_requested)
 
+        self.body = _Rounded(radius=14)
+        self._body_layout = QVBoxLayout(self.body)
+        self._body_layout.setContentsMargins(MARGIN, MARGIN - 6, MARGIN, MARGIN - 6)
+        self._body_layout.setSpacing(12)
+        self._body_layout.addLayout(header)
+        self._body_layout.addWidget(self.capture_source)
+        self._body_layout.addWidget(self._entry)
+        self._body_layout.addWidget(self.status)
+        self._body_layout.addWidget(self.error)
+        self._body_layout.addWidget(self.instruction)
+        self._body_layout.addWidget(self.crop)
+        self._body_layout.addWidget(self.notice)
+        self._body_layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
+
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(MARGIN, MARGIN - 6, MARGIN, MARGIN - 6)
-        self._layout.setSpacing(12)
-        self._layout.addLayout(header)
-        self._layout.addWidget(self._source_row)
-        self._layout.addWidget(self._entry)
-        self._layout.addWidget(self.status)
-        self._layout.addWidget(self.error)
-        self._layout.addWidget(self.instruction)
-        self._layout.addWidget(self.crop)
-        self._layout.addWidget(self.notice)
-        self._layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(BAR_GAP)
+        self._layout.addWidget(self.bar, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._layout.addWidget(self.body)
         self._show_only()
         # Qt settles the window's screen after the move event, so the move alone reads it too soon.
         self.create()
         self.windowHandle().screenChanged.connect(lambda _screen: self._show_capture_source())
 
     def appear(self) -> None:
-        """Show the panel in front, ready for the goal if it is asking for one."""
+        """Show the window in front, ready for the goal if the panel is asking for one."""
+        if not self._placed:
+            self._place_at_top_centre()
         self.show()
         self.raise_()
         self.activateWindow()
-        if not self._entry.isHidden():
-            self.goal_input.setFocus()
+        self._focus_goal()
 
     def toggle(self) -> None:
-        """Hide the panel, or bring it back as it was. Hiding ends nothing."""
+        """Hide the whole window, bar included, or bring it back as it was. Hiding ends nothing."""
         if self.isVisible():
             self.hide()
         else:
             self.appear()
+
+    @property
+    def folded(self) -> bool:
+        return self.body.isHidden()
+
+    def fold(self) -> None:
+        """Leave only the bar on screen. Whatever the panel was doing carries on behind it."""
+        self.body.hide()
+        self._fit()
+
+    def unfold(self) -> None:
+        """Bring the panel back under the bar, as it was."""
+        self.body.show()
+        self._fit()
+        self.activateWindow()
+        self._focus_goal()
 
     def set_goal(self, goal: str) -> None:
         self._goal.setText(goal)
@@ -226,29 +323,49 @@ class StepPanel(QWidget):
             self.crop.setPixmap(render_crop(image, view, self.devicePixelRatioF()))
         self._fit()
 
+    def show_usage(self, summary: str) -> None:
+        """Show the usage summary in its own small window, read-only."""
+        if self._usage_window is None:
+            self._usage_window = UsageWindow(self)
+        self._usage_window.show_summary(summary)
+
     def set_monitors(self, monitors: list[Monitor]) -> None:
-        """List these monitors in the selector, keeping what is selected."""
+        """List these monitors in the Capture monitor menu, keeping what is selected."""
         self._monitors = list(monitors)
         connectors = [monitor.connector for monitor in monitors]
-        selector = self.monitor_selector
-        selector.blockSignals(True)
-        selector.clear()
-        selector.addItem(Pick.FOLLOW_PANEL.value, Pick.FOLLOW_PANEL)
+        entries: list[tuple[str, Pick | str]] = [(Pick.FOLLOW_PANEL.value, Pick.FOLLOW_PANEL)]
         for monitor in sorted(monitors, key=lambda item: item.connector):
-            selector.addItem(monitor_label(monitor), monitor.connector)
+            entries.append((monitor_label(monitor), monitor.connector))
         if isinstance(self._selection, str) and self._selection not in connectors:
             # Kept, so the choice stays visible and the next capture reports it missing.
-            selector.addItem(f"{self._selection}  (not connected)", self._selection)
-        selector.addItem(Pick.WHOLE_DESKTOP.value, Pick.WHOLE_DESKTOP)
-        selector.setCurrentIndex(selector.findData(self._selection))
-        selector.blockSignals(False)
-        self._source_row.show()
+            entries.append((f"{self._selection}  (not connected)", self._selection))
+        entries.append((Pick.WHOLE_DESKTOP.value, Pick.WHOLE_DESKTOP))
+
+        for action in self._monitor_group.actions():
+            self._monitor_group.removeAction(action)
+        self.monitor_menu.clear()
+        for text, data in entries:
+            action = self.monitor_menu.addAction(text)
+            action.setData(data)
+            action.setCheckable(True)
+            action.setChecked(data == self._selection)
+            self._monitor_group.addAction(action)
+        self.monitor_menu.setEnabled(True)
+        self.capture_source.show()
         self._show_capture_source()
         self._fit()
 
+    def monitor_entries(self) -> list[tuple[str, bool]]:
+        """The Capture monitor menu as shown: each entry's text and whether it is checked."""
+        return [(action.text(), action.isChecked()) for action in self.monitor_menu.actions()]
+
     def select_monitor(self, selection: Pick | str) -> None:
-        """Select an entry of the selector, as the user would."""
-        self.monitor_selector.setCurrentIndex(self.monitor_selector.findData(selection))
+        """Pick an entry of the Capture monitor menu, as the user would."""
+        for action in self._monitor_group.actions():
+            if action.data() == selection:
+                action.trigger()
+                return
+        raise ValueError(f"no capture monitor entry for {selection!r}")
 
     def monitor_choice(self) -> MonitorChoice:
         """The monitor the next capture is from, read from the panel as it is now."""
@@ -262,10 +379,11 @@ class StepPanel(QWidget):
         """The panel's screen as Qt names it. Through XWayland on GNOME, a Mutter connector."""
         return self.screen().name()
 
+    def _on_monitor_picked(self, action: QAction) -> None:
+        self._selection = action.data()
+        self._show_capture_source()
+
     def _show_capture_source(self) -> None:
-        data = self.monitor_selector.currentData()
-        if data is not None:
-            self._selection = data
         choice = self.monitor_choice()
         monitor = next(
             (item for item in self._monitors if item.connector == choice.connector), None
@@ -282,6 +400,19 @@ class StepPanel(QWidget):
             )
         self.capture_source.setText(f"Next capture: {source}")
 
+    def _end_and_fold(self) -> None:
+        self.task_ended.emit()
+        self.fold()
+
+    def _focus_goal(self) -> None:
+        if not self.folded and not self._entry.isHidden():
+            self.goal_input.setFocus()
+
+    def _place_at_top_centre(self) -> None:
+        area = self.screen().availableGeometry()
+        self.move(area.x() + (area.width() - self.width()) // 2, area.y() + TOP_OFFSET)
+        self._placed = True
+
     def _show_only(self, *shown: QWidget) -> None:
         for widget in (
             self._entry,
@@ -296,14 +427,28 @@ class StepPanel(QWidget):
 
     def _fit(self) -> None:
         # Left to the next event loop pass, the layout's old minimum height would block the shrink.
-        self._layout.invalidate()
-        self._layout.activate()
+        for layout in (self._body_layout, self._layout):
+            layout.invalidate()
+            layout.activate()
         self.resize(PANEL_WIDTH, self._layout.totalHeightForWidth(PANEL_WIDTH))
+        self._update_mask()
+
+    def _update_mask(self) -> None:
+        # Only the bar and the panel take clicks; around and between them, they reach the window
+        # behind, as the eye expects from what is drawn there.
+        region = QRegion(self.bar.geometry())
+        if not self.folded:
+            region = region.united(QRegion(self.body.geometry()))
+        self.setMask(region)
 
     def _submit_goal(self) -> None:
         goal = self.goal_input.text().strip()
         if goal:
             self.goal_submitted.emit(goal)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_mask()
 
     def moveEvent(self, event: QMoveEvent) -> None:
         # Dragged to another monitor, the panel follows it with the next capture.
@@ -314,17 +459,34 @@ class StepPanel(QWidget):
         self.closed.emit()
         super().closeEvent(event)
 
-    def paintEvent(self, event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(BACKGROUND)
-        painter.drawRoundedRect(self.rect(), 14, 14)
-
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        # With no title bar, the panel's background is what moves it off whatever it covers.
+        # With no title bar, the bar's and the panel's backgrounds are what move the window, both
+        # together, off whatever it covers.
         if event.button() == Qt.MouseButton.LeftButton and self.windowHandle():
             self.windowHandle().startSystemMove()
+
+
+class UsageWindow(QWidget):
+    """The `screenguide usage` summary, read-only, above the panel it was opened from."""
+
+    def __init__(self, parent: QWidget) -> None:
+        # A window of the panel's own, so it stays above it and ends with it.
+        super().__init__(parent, Qt.WindowType.Window)
+        self.setWindowTitle("screenguide usage")
+        self.setStyleSheet(USAGE_STYLE)
+        self.text = QPlainTextEdit(readOnly=True)
+        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(self.text)
+        self.resize(640, 420)
+
+    def show_summary(self, summary: str) -> None:
+        self.text.setPlainText(summary)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
 
 def render_crop(image: Image.Image, view: CropView, pixel_ratio: float = 1.0) -> QPixmap:
@@ -396,12 +558,14 @@ def start_app() -> QApplication:
     return app
 
 
-def run_demo(screenshot: Screenshot) -> int:
-    """Show the demo steps until the panel is closed. No session runs and nothing is captured."""
+def run_demo(screenshot: Screenshot, usage_summary: Callable[[], str]) -> int:
+    """Show the demo steps until Quit. No session runs and nothing is captured."""
     steps = iter(demo_steps(decode_image(screenshot).size))
     app = start_app()
     panel = StepPanel(DEMO_GOAL)
     panel.next_requested.connect(lambda: panel.show_step(next(steps), screenshot))
+    panel.usage_requested.connect(lambda: panel.show_usage(usage_summary()))
+    panel.quit_requested.connect(app.quit)
     panel.show_step(next(steps), screenshot)
-    panel.show()
+    panel.appear()
     return app.exec()

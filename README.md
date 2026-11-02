@@ -21,7 +21,7 @@ step.
 In detail, each step sends:
 
 - the screenshot of one monitor, the one the panel names on its "Next capture" line, or of the whole
-  desktop, every monitor included, if you pick "Whole desktop" in the panel (see
+  desktop, every monitor included, if you pick "Whole desktop" in the ⋮ menu (see
   [Choose the monitor](#choose-the-monitor)), with numbered boxes drawn around the text found on
   it;
 - the text found on the screen, as a numbered list;
@@ -29,7 +29,7 @@ In detail, each step sends:
 
 A step whose reply cannot be read is asked once more, which sends the same request again.
 
-The panel turns invisible during each capture, so it stays out of the screenshot, and says
+The bar and the panel turn invisible during each capture, so they stay out of the screenshot, and says
 "Sending a screenshot (…) to external provider anthropic (…)" each time one goes out. The screen
 is captured only when you ask for a step, once per step. Screenshots stay in memory unless you
 set [`screenshot_dir`](#configuration). Anthropic's own terms govern what happens to the data it
@@ -88,7 +88,7 @@ systemctl --user daemon-reload
 systemctl --user show-environment | grep -c ANTHROPIC_API_KEY  # prints 1
 ```
 
-A panel that was already running keeps its old environment: close it with × first.
+A panel that was already running keeps its old environment: end it with ⋮ → Quit first.
 
 ## Configuration
 
@@ -126,8 +126,8 @@ recorded either way.
 
 ## Keyboard shortcut
 
-`screenguide toggle` shows the panel, starting it if it is not running, or hides it when it is
-showing. Bind it to a key in GNOME: Settings → Keyboard → View and Customize Shortcuts → Custom
+`screenguide toggle` shows the bar and the panel, starting them if they are not running, or hides
+them when they are showing. Bind it to a key in GNOME: Settings → Keyboard → View and Customize Shortcuts → Custom
 Shortcuts, then add one with
 
 - **Name:** `screenguide`
@@ -141,15 +141,25 @@ this is not the `GlobalShortcuts` portal.
 
 ## Guide a task
 
-1. Press the shortcut. The panel opens on top of your windows.
+1. Press the shortcut. A bar opens at the top centre of your monitor, on top of your windows,
+   with the panel below it. Drag either one to move both.
 2. Type the goal, such as "Change the Gmail theme", and press Enter. The panel shows "Thinking…",
    steps out of the way while it captures the screen, and then shows the first step.
 3. Read the instruction. The target's name is in colour, and the crop shows where it is. When
    the target has no text of its own, such as an icon, the panel shows only the instruction.
 4. Do the step yourself, then press **Next step**. Repeat until the panel shows "Done".
 
-The shortcut hides and shows the panel without losing the guide; × closes it. Instructions follow
-the language of the goal you type.
+Instructions follow the language of the goal you type. The bar stays on screen with the panel:
+
+- **Hide** folds the panel away under the bar. The guide carries on, and a step that arrives
+  meanwhile is waiting when you press **Guide me +** to unfold it.
+- **New Task**, in the panel header, drops the current task and asks for a new goal. A step the
+  dropped task was still working on never appears.
+- **×** drops the task the same way and folds the panel; screenguide keeps running with the bar.
+- **⋮** holds **Capture monitor** (see below), **Usage**, which shows what
+  `screenguide usage` prints, and **Quit**.
+
+The shortcut hides and shows the whole window, bar included, without losing the guide.
 
 From a terminal, `screenguide panel` opens the same panel, and `screenguide guide --goal "..."`
 runs the guide with no panel, printing each step.
@@ -158,7 +168,7 @@ runs the guide with no panel, printing each step.
 
 Each capture is cropped to one monitor, which the panel names on its "Next capture" line. By default it
 is the monitor the panel is on when you ask for the step, so dragging the panel to another monitor
-moves the next capture there. The selector beside it pins captures to one monitor, by connector and
+moves the next capture there. ⋮ → **Capture monitor** pins captures to one monitor, by connector and
 name as `screenguide monitors` lists them, until you pick "Follow panel" again. "Whole desktop"
 sends every monitor in one image. [`monitor`](#configuration) sets the starting choice.
 

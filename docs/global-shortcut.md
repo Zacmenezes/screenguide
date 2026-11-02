@@ -1,10 +1,10 @@
 # Global shortcut
 
-`screenguide toggle` shows the panel, or hides it when it is showing. If no panel is running,
-that launch becomes the panel. Every later launch, `screenguide panel` included, hands its
-command to the running panel and exits. Hiding the panel keeps the goal and the guide where they
-were; showing it again puts the cursor in the goal field when the panel is asking for one. The ×
-button still ends the panel.
+`screenguide toggle` shows the panel, or hides it when it is showing; the floating bar above it
+goes and comes with it. If no panel is running, that launch becomes the panel. Every later launch,
+`screenguide panel` included, hands its command to the running panel and exits. Hiding the panel
+keeps the goal and the guide where they were; showing it again puts the cursor in the goal field
+when the panel is asking for one. ⋮ → Quit ends the panel.
 
 Bind the key in GNOME so that it runs `screenguide toggle` from any app.
 

@@ -9,8 +9,9 @@ import pytest
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PIL import Image  # noqa: E402
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QColor  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from screenguide.capture import Screenshot  # noqa: E402
@@ -20,6 +21,7 @@ from screenguide.monitors import WHOLE_DESKTOP, Monitor, MonitorChoice  # noqa: 
 from screenguide.panel import (  # noqa: E402
     ACCENT,
     BACKGROUND,
+    TOP_OFFSET,
     Pick,
     StepPanel,
     demo_steps,
@@ -51,8 +53,123 @@ def test_panel_stays_on_top_with_a_see_through_background():
     panel = StepPanel("Goal")
 
     assert panel.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert panel.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert 0 < BACKGROUND.alpha() < 255
+
+
+def test_bar_sits_centred_above_the_panel_in_the_same_window():
+    panel = StepPanel("Goal")
+    panel.appear()
+
+    bar, body = panel.bar.geometry(), panel.body.geometry()
+    assert panel.bar.window() is panel and panel.body.window() is panel
+    assert bar.bottom() < body.top()
+    assert abs(bar.center().x() - panel.width() // 2) <= 1
+    assert [b.text() for b in (panel.guide_me_button, panel.hide_button, panel.menu_button)] == [
+        "Guide me  +",
+        "Hide",
+        "⋮",
+    ]
+    assert panel.new_task_button.isVisible()
+
+
+def test_window_first_opens_at_the_top_centre_of_its_monitor():
+    panel = StepPanel("Goal")
+    panel.appear()
+
+    area = panel.screen().availableGeometry()
+    assert abs(panel.geometry().center().x() - area.center().x()) <= 1
+    assert panel.y() == area.y() + TOP_OFFSET
+
+    panel.move(area.x(), area.y() + 300)
+    panel.hide()
+    panel.appear()
+    assert panel.pos() == area.topLeft() + QPoint(0, 300)
+
+
+def test_dragging_from_the_bar_or_the_panel_moves_the_whole_window(monkeypatch):
+    panel = StepPanel("Goal")
+    panel.appear()
+    moves = []
+    monkeypatch.setattr(panel.windowHandle(), "startSystemMove", lambda: moves.append(True) or True)
+
+    for widget in (panel.bar, panel.body):
+        QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=QPoint(4, widget.height() // 2))
+
+    assert len(moves) == 2
+
+
+def test_hide_folds_the_panel_under_the_bar_and_guide_me_brings_it_back(screenshot):
+    panel = StepPanel("Goal")
+    panel.show_step(step(), screenshot)
+    panel.appear()
+    unfolded = panel.height()
+
+    panel.hide_button.click()
+
+    assert panel.folded and panel.isVisible()
+    assert panel.bar.isVisible() and not panel.body.isVisible()
+    assert panel.height() == panel.bar.height()
+
+    panel.guide_me_button.click()
+
+    assert not panel.folded and panel.instruction.isVisible()
+    assert panel.height() == unfolded
+
+
+def test_guide_me_focuses_the_goal_entry():
+    panel = StepPanel()
+    panel.show_goal_entry()
+    panel.appear()
+    panel.fold()
+    panel.start_button.setFocus()
+
+    panel.guide_me_button.click()
+
+    assert panel.focusWidget() is panel.goal_input
+
+
+def test_new_task_and_close_end_the_task_and_close_also_folds():
+    panel = StepPanel("Goal")
+    panel.appear()
+    ended = []
+    panel.task_ended.connect(lambda: ended.append(True))
+
+    panel.new_task_button.click()
+    assert ended == [True] and not panel.folded
+
+    panel._close.click()
+    assert ended == [True, True] and panel.folded and panel.isVisible()
+
+
+def test_usage_and_quit_are_menu_entries():
+    panel = StepPanel("Goal")
+    asked = []
+    panel.usage_requested.connect(lambda: asked.append("usage"))
+    panel.quit_requested.connect(lambda: asked.append("quit"))
+
+    panel.usage_action.trigger()
+    panel.quit_action.trigger()
+
+    assert asked == ["usage", "quit"]
+    assert [a.text() for a in panel.menu.actions() if a.text()] == [
+        "Capture monitor",
+        "Usage",
+        "Quit",
+    ]
+
+
+def test_usage_window_shows_the_summary_read_only():
+    panel = StepPanel("Goal")
+
+    panel.show_usage("by day\n2026-11-02  1 call")
+    panel.show_usage("by day\n2026-11-02  2 calls")
+
+    window = panel._usage_window
+    assert window.isVisible() and window.text.isReadOnly()
+    assert window.text.toPlainText().endswith("2 calls")
+    assert window.parent() is panel
 
 
 def test_panel_renders_instruction_crop_and_next(screenshot):
@@ -216,32 +333,46 @@ def screen(monkeypatch):
     return where
 
 
-def entries(panel):
-    selector = panel.monitor_selector
-    return [selector.itemText(index) for index in range(selector.count())]
+def checked(panel):
+    return [text for text, is_checked in panel.monitor_entries() if is_checked]
 
 
-def test_selector_is_hidden_until_there_are_monitors_to_list():
+def test_monitor_choices_wait_until_there_are_monitors_to_list():
     panel = StepPanel("Goal")
     panel.show()
 
-    assert not panel.monitor_selector.isVisible()
+    assert not panel.monitor_menu.isEnabled()
+    assert not panel.capture_source.isVisible()
 
     panel.set_monitors(MONITORS)
-    assert panel.monitor_selector.isVisible() and panel.capture_source.isVisible()
+    assert panel.monitor_menu.isEnabled() and panel.capture_source.isVisible()
 
 
-def test_selector_lists_follow_each_monitor_by_connector_and_name_and_the_desktop(screen):
+def test_menu_lists_follow_each_monitor_by_connector_and_name_and_the_desktop(screen):
     panel = StepPanel("Goal")
     panel.set_monitors(MONITORS)
 
-    assert entries(panel) == [
-        "Follow panel",
-        'DP-3  Dell Inc. 24"',
-        "eDP-1  Built-in display",
-        "Whole desktop",
+    assert panel.monitor_entries() == [
+        ("Follow panel", True),
+        ('DP-3  Dell Inc. 24"', False),
+        ("eDP-1  Built-in display", False),
+        ("Whole desktop", False),
     ]
-    assert panel.monitor_selector.currentText() == "Follow panel"
+    assert panel.monitor_menu in [action.menu() for action in panel.menu.actions()]
+
+
+def test_picking_a_menu_entry_checks_it_alone(screen):
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+
+    entry = next(a for a in panel.monitor_menu.actions() if a.text().startswith("eDP-1"))
+    entry.trigger()
+
+    assert checked(panel) == ["eDP-1  Built-in display"]
+    assert panel.monitor_choice() == MonitorChoice("eDP-1")
+
+    panel.set_monitors(MONITORS)
+    assert checked(panel) == ["eDP-1  Built-in display"]
 
 
 def test_following_reads_the_panel_screen_each_time_it_is_asked(screen):
@@ -297,7 +428,7 @@ def test_starting_monitor_is_selected(screen):
     panel = StepPanel("Goal", monitor="eDP-1")
     panel.set_monitors(MONITORS)
 
-    assert panel.monitor_selector.currentText() == "eDP-1  Built-in display"
+    assert checked(panel) == ["eDP-1  Built-in display"]
     assert panel.monitor_choice() == MonitorChoice("eDP-1")
 
 
@@ -305,11 +436,11 @@ def test_disconnected_pinned_monitor_stays_selected_and_says_so(screen):
     panel = StepPanel("Goal", monitor="HDMI-9")
     panel.set_monitors(MONITORS)
 
-    assert panel.monitor_selector.currentText() == "HDMI-9  (not connected)"
+    assert checked(panel) == ["HDMI-9  (not connected)"]
     assert panel.monitor_choice() == MonitorChoice("HDMI-9")
     assert panel.capture_source.text() == "Next capture: HDMI-9, not connected"
 
     panel.set_monitors(MONITORS[:1])
     panel.select_monitor("eDP-1")
     panel.set_monitors(MONITORS[1:])
-    assert panel.monitor_selector.currentText() == "eDP-1  (not connected)"
+    assert checked(panel) == ["eDP-1  (not connected)"]

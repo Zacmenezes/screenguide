@@ -268,6 +268,7 @@ def panel(monitor: str | None = None, command: str = "show") -> int:
                 ),
                 listener,
                 read_monitors,
+                _usage_summary,
                 starting_monitor,
             )
         except (ImportError, OSError, ConfigError) as exc:
@@ -283,7 +284,7 @@ def panel_demo(image: Path) -> int:
     try:
         from screenguide.panel import run_demo
 
-        return run_demo(FileCapturer(image).capture())
+        return run_demo(FileCapturer(image).capture(), _usage_summary)
     except (ImportError, OSError, DetectionError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -297,6 +298,15 @@ def usage() -> int:
         return 1
     print(summarize(records, malformed))
     return 0
+
+
+def _usage_summary() -> str:
+    """What `screenguide usage` prints, errors included, for the panel's Usage window."""
+    try:
+        records, malformed = read_usage_log(load_config().usage_log)
+    except (OSError, ConfigError) as exc:
+        return f"error: {exc}"
+    return summarize(records, malformed)
 
 
 def monitors() -> int:
