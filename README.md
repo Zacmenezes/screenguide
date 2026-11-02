@@ -38,10 +38,11 @@ receives.
 - **Tested only on Ubuntu 26.04, GNOME 50, Wayland.** Other desktops may work but have not been
   tried; see [Known limits](#known-limits).
 - Python 3.11 to 3.14. The OCR engine has no Python 3.15 build yet.
-- `python3-venv`, which a default Ubuntu install lacks:
+- `python3-venv`, which a default Ubuntu install lacks, and `libxcb-cursor0`, which Qt needs to
+  run the panel through XWayland:
 
   ```sh
-  sudo apt install python3-venv
+  sudo apt install python3-venv libxcb-cursor0
   ```
 
 - An Anthropic API key, from the [Claude Console](https://console.anthropic.com/).
