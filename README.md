@@ -173,6 +173,31 @@ size, latency and estimated cost. To summarise by day, session, provider and mod
 screenguide usage
 ```
 
+## Evaluation
+
+`screenguide eval` runs saved cases through the same pipeline as the app, one step each, and
+scores whether the chosen element hit the right box. A case is one line of a JSONL file:
+
+```json
+{"image": "images/settings.png", "goal": "Open settings", "history": ["Click File, top left."], "correct_bbox": {"x": 60, "y": 8, "width": 70, "height": 20}}
+```
+
+`image` is relative to the cases file; `history` holds the instructions already shown;
+`correct_bbox` is in pixels of the original image. A hit is a chosen box that overlaps
+`correct_bbox`. A malformed line or a missing image is reported with its line number and skipped.
+
+```sh
+screenguide eval eval/cases.jsonl --limit 2
+```
+
+Each case sends one screenshot to the provider, two if the reply needs its retry, and the
+terminal says so before the first call. `--model`, `--effort` and `--image-long-edge` override
+the [configuration](#configuration) for one run. The run file goes to `runs/` next to the cases
+file, named by its UTC start time: a first line with the run's settings, then one line per case
+with its outcome (`hit`, `miss`, `no_box` or `error`), the chosen box, tokens, cost and latency.
+The calls also go to the usage log under one session per run, so `screenguide usage` shows what
+the run spent. Real screenshots in `eval/images/` and the runs in `eval/runs/` stay out of git.
+
 ## Other commands
 
 | Command | What it does |

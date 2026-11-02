@@ -82,6 +82,10 @@ class ModelProvider(Protocol):
 
     def complete(self, request: ModelRequest) -> ModelReply: ...
 
+    def check_credentials(self) -> None:
+        """Raise `ModelProviderError` if no credentials were found. Makes no request."""
+        ...
+
 
 class AnthropicProvider:
     name = "anthropic"
@@ -94,6 +98,11 @@ class AnthropicProvider:
         self._effort = effort
         # The SDK resolves credentials itself: environment, then `ant auth login` profiles.
         self._client = client or anthropic.Anthropic()
+
+    def check_credentials(self) -> None:
+        client = self._client
+        if client.api_key is None and client.auth_token is None and client.credentials is None:
+            raise ModelProviderError(_credentials_help("no credentials found"))
 
     def complete(self, request: ModelRequest) -> ModelReply:
         output_config: dict[str, Any] = {
