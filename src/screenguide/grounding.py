@@ -44,6 +44,8 @@ class MarkedScreen:
 
 
 class GroundingStrategy(Protocol):
+    name: str  # Names the strategy in evaluation runs.
+
     def mark(self, screenshot: Screenshot, elements: list[Element]) -> MarkedScreen: ...
 
     def resolve(self, marked: MarkedScreen, element_id: int) -> BBox:
@@ -53,6 +55,8 @@ class GroundingStrategy(Protocol):
 
 class SetOfMarkGrounding:
     """Draws numbered boxes on the image, downscaled first so they stay readable at sent size."""
+
+    name = "set-of-mark"
 
     def __init__(self, max_long_edge: int | None = None) -> None:
         self._max_long_edge = max_long_edge

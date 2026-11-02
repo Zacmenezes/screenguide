@@ -33,6 +33,9 @@ class StubProvider:
     def __init__(self, model="stub", effort=None):
         self.model = model
 
+    def check_credentials(self):
+        pass
+
     def complete(self, request):
         elements = request.marked.elements
         element_id = min(elements, default=None)

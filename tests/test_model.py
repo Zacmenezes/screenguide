@@ -207,3 +207,17 @@ def test_real_sdk_without_credentials_gives_the_credentials_help(monkeypatch):
 
     with pytest.raises(ModelProviderError, match="ANTHROPIC_API_KEY"):
         provider.complete(REQUEST)
+
+
+def test_real_sdk_without_credentials_fails_the_check_without_a_request(monkeypatch):
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ModelProviderError, match="ANTHROPIC_API_KEY"):
+        AnthropicProvider("claude-haiku-5-5").check_credentials()
+
+
+def test_real_sdk_with_a_key_passes_the_check(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    AnthropicProvider("claude-haiku-5-5").check_credentials()

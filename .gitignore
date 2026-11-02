@@ -16,3 +16,6 @@ local/
 
 # Real screenshots in the evaluation dataset
 eval/images/
+
+# Evaluation run files
+eval/runs/

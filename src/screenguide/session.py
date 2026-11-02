@@ -3,7 +3,7 @@
 import logging
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -29,6 +29,7 @@ class Step:
     bbox: BBox | None
     done: bool
     confidence: float
+    element_id: int | None = None  # The box number the model chose.
     # The capture `bbox` refers to, so that the panel can crop it.
     screenshot: Screenshot | None = field(default=None, repr=False, compare=False)
 
@@ -43,10 +44,13 @@ class GuideSession:
         provider: ModelProvider,
         tracker: UsageTracker,
         notify: Callable[[str], None] = lambda message: None,
+        history: Iterable[str] = (),
+        session_id: str | None = None,
     ) -> None:
+        """`history` preloads the steps already shown; `session_id` groups the usage records."""
         self.goal = goal
-        self.history: list[str] = []
-        self.session_id = uuid.uuid4().hex
+        self.history: list[str] = list(history)
+        self.session_id = session_id or uuid.uuid4().hex
         self._capturer = capturer
         self._detector = detector
         self._grounding = grounding
@@ -92,6 +96,7 @@ class GuideSession:
             bbox=bbox,
             done=response.done,
             confidence=response.confidence,
+            element_id=response.element_id,
             screenshot=screenshot,
         )
 
