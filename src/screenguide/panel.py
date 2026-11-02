@@ -1,4 +1,4 @@
-"""`layer:ui`: the panel that shows one step above the other windows."""
+"""`layer:ui`: the panel that shows the guide above the other windows."""
 
 import logging
 import math
@@ -8,6 +8,7 @@ import signal
 from PIL import Image
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import (
+    QCloseEvent,
     QColor,
     QImage,
     QMouseEvent,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -43,6 +45,13 @@ STYLE = f"""
     QLabel {{ color: #f4f4f5; background: transparent; }}
     QLabel#goal {{ color: #a1a1aa; }}
     QLabel#instruction {{ font-size: 15px; }}
+    QLabel#status {{ color: {ACCENT}; font-size: 15px; font-weight: 600; }}
+    QLabel#error {{ color: #fca5a5; }}
+    QLabel#notice {{ color: #a1a1aa; font-size: 12px; }}
+    QLineEdit {{
+        color: #f4f4f5; background: rgba(255, 255, 255, 18);
+        border: 1px solid #52525b; border-radius: 8px; padding: 7px 10px;
+    }}
     QPushButton {{
         color: {ACCENT}; background: transparent; font-weight: 600;
         border: 1px solid #52525b; border-radius: 8px; padding: 7px 14px;
@@ -54,11 +63,13 @@ STYLE = f"""
 
 
 class StepPanel(QWidget):
-    """Shows a step and reports "Next step" presses. What a press does is up to its owner."""
+    """Shows what it is told and reports what the user does, leaving the rest to its owner."""
 
+    goal_submitted = Signal(str)
     next_requested = Signal()
+    closed = Signal()
 
-    def __init__(self, goal: str) -> None:
+    def __init__(self, goal: str = "") -> None:
         super().__init__(
             None,
             Qt.WindowType.Window
@@ -79,6 +90,22 @@ class StepPanel(QWidget):
         header.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignTop)
         header.addWidget(self._goal, stretch=1)
 
+        self.goal_input = QLineEdit(placeholderText="What do you want to do?")
+        self.goal_input.returnPressed.connect(self._submit_goal)
+        self.start_button = QPushButton("Start")
+        self.start_button.clicked.connect(self._submit_goal)
+        self._entry = QWidget()
+        entry = QHBoxLayout(self._entry)
+        entry.setContentsMargins(0, 0, 0, 0)
+        entry.addWidget(self.goal_input, stretch=1)
+        entry.addWidget(self.start_button)
+
+        self.status = QLabel(objectName="status")
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.error = QLabel(objectName="error", wordWrap=True)
+        self.error.setTextFormat(Qt.TextFormat.PlainText)
+        self.notice = QLabel(objectName="notice", wordWrap=True)
+        self.notice.setTextFormat(Qt.TextFormat.PlainText)
         self.instruction = QLabel(objectName="instruction", wordWrap=True)
         self.instruction.setTextFormat(Qt.TextFormat.RichText)
         self.crop = QLabel()
@@ -90,24 +117,84 @@ class StepPanel(QWidget):
         self._layout.setContentsMargins(MARGIN, MARGIN - 6, MARGIN, MARGIN - 6)
         self._layout.setSpacing(12)
         self._layout.addLayout(header)
+        self._layout.addWidget(self._entry)
+        self._layout.addWidget(self.status)
+        self._layout.addWidget(self.error)
         self._layout.addWidget(self.instruction)
         self._layout.addWidget(self.crop)
+        self._layout.addWidget(self.notice)
         self._layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self._show_only()
+
+    def set_goal(self, goal: str) -> None:
+        self._goal.setText(goal)
+
+    def show_goal_entry(self) -> None:
+        self._show_only(self._entry)
+        self.goal_input.setFocus()
+        self._fit()
+
+    def show_thinking(self) -> None:
+        self.status.setText("Thinking…")
+        self._show_only(self.status)
+        self._fit()
+
+    def show_notice(self, message: str) -> None:
+        self.notice.setText(message)
+        self.notice.show()
+        self._fit()
+
+    def show_error(self, message: str) -> None:
+        self.error.setText(message)
+        self.next_button.setText("Retry")
+        self.next_button.setEnabled(True)
+        self._show_only(self.error, self.next_button)
+        self._fit()
 
     def show_step(self, step: Step, screenshot: Screenshot) -> None:
         self.instruction.setText(highlight_instruction(step.instruction, step.target_label, ACCENT))
-        self.crop.setVisible(step.bbox is not None)
+        self.status.setText("Done" if step.done else "")
+        self.next_button.setText("Next step")
+        self.next_button.setEnabled(not step.done)
+        self._show_only(
+            self.instruction,
+            *([self.status] if step.done else [self.next_button]),
+            *([self.crop] if step.bbox is not None else []),
+        )
         if step.bbox is None:
             self.crop.clear()
         else:
             image = decode_image(screenshot)
             view = crop_view(step.bbox, image.size)
             self.crop.setPixmap(render_crop(image, view, self.devicePixelRatioF()))
-        self.next_button.setEnabled(not step.done)
+        self._fit()
+
+    def _show_only(self, *shown: QWidget) -> None:
+        for widget in (
+            self._entry,
+            self.status,
+            self.error,
+            self.instruction,
+            self.crop,
+            self.notice,
+            self.next_button,
+        ):
+            widget.setVisible(widget in shown)
+
+    def _fit(self) -> None:
         # Left to the next event loop pass, the layout's old minimum height would block the shrink.
         self._layout.invalidate()
         self._layout.activate()
         self.resize(PANEL_WIDTH, self._layout.totalHeightForWidth(PANEL_WIDTH))
+
+    def _submit_goal(self) -> None:
+        goal = self.goal_input.text().strip()
+        if goal:
+            self.goal_submitted.emit(goal)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.closed.emit()
+        super().closeEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -177,10 +264,8 @@ def demo_steps(image_size: tuple[int, int]) -> list[Step]:
     ]
 
 
-def run_demo(screenshot: Screenshot) -> int:
-    """Show the demo steps until the panel is closed. No session runs and nothing is captured."""
-    steps = iter(demo_steps(decode_image(screenshot).size))
-
+def start_app() -> QApplication:
+    """The application the panel runs in, on a platform that can keep it on top."""
     # GNOME Wayland lets no client keep itself on top, so the panel goes through XWayland.
     platform = os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     if platform == "xcb" and not os.environ.get("DISPLAY"):
@@ -189,9 +274,16 @@ def run_demo(screenshot: Screenshot) -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QApplication.instance() or QApplication([])
+    logger.info("panel platform=%s", QApplication.platformName())
+    return app
+
+
+def run_demo(screenshot: Screenshot) -> int:
+    """Show the demo steps until the panel is closed. No session runs and nothing is captured."""
+    steps = iter(demo_steps(decode_image(screenshot).size))
+    app = start_app()
     panel = StepPanel(DEMO_GOAL)
     panel.next_requested.connect(lambda: panel.show_step(next(steps), screenshot))
     panel.show_step(next(steps), screenshot)
     panel.show()
-    logger.info("panel platform=%s", QApplication.platformName())
     return app.exec()

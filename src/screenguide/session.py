@@ -4,10 +4,10 @@ import logging
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from screenguide.capture import ScreenCapturer
+from screenguide.capture import ScreenCapturer, Screenshot
 from screenguide.contract import (
     InvalidModelResponse,
     ModelRefusal,
@@ -29,6 +29,8 @@ class Step:
     bbox: BBox | None
     done: bool
     confidence: float
+    # The capture `bbox` refers to, so that the panel can crop it.
+    screenshot: Screenshot | None = field(default=None, repr=False, compare=False)
 
 
 class GuideSession:
@@ -90,6 +92,7 @@ class GuideSession:
             bbox=bbox,
             done=response.done,
             confidence=response.confidence,
+            screenshot=screenshot,
         )
 
     def _ask(self, request: ModelRequest, attempt: int) -> tuple[ModelResponse, BBox | None]:

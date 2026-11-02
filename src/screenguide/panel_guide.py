@@ -1,0 +1,160 @@
+"""`layer:ui`: runs a guide session from the panel, with slow work off the UI thread."""
+
+import logging
+import threading
+from collections.abc import Callable
+from enum import Enum
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from screenguide.capture import ScreenCapturer, Screenshot
+from screenguide.errors import GUIDE_ERRORS, describe_guide_error
+from screenguide.panel import StepPanel, start_app
+from screenguide.session import GuideSession, Step
+
+logger = logging.getLogger(__name__)
+
+# How long the compositor gets to draw the panel as gone before the capture.
+LEAVE_SCREEN_MS = 100
+
+CapturerWrapper = Callable[[ScreenCapturer], ScreenCapturer]
+Notify = Callable[[str], None]
+SessionFactory = Callable[[str, CapturerWrapper, Notify], GuideSession]
+
+
+class State(Enum):
+    IDLE = "idle"
+    THINKING = "thinking"
+    STEP = "step"
+    DONE = "done"
+    ERROR = "error"
+
+
+class _OffScreenCapturer:
+    """On the worker thread: has the UI thread hide the panel, captures, then brings it back.
+
+    Hiding means full transparency. On GNOME, unmapping the window instead (`hide()`) lost it: after
+    a few hide/show cycles it stayed mapped and painted but the compositor no longer displayed it.
+    """
+
+    def __init__(
+        self,
+        inner: ScreenCapturer,
+        leave: Callable[[threading.Event], None],
+        come_back: Callable[[], None],
+    ) -> None:
+        self._inner = inner
+        self._leave = leave
+        self._come_back = come_back
+
+    def capture(self) -> Screenshot:
+        gone = threading.Event()
+        self._leave(gone)
+        gone.wait()
+        try:
+            return self._inner.capture()
+        finally:
+            self._come_back()
+
+
+class GuideController(QObject):
+    """Moves the panel through idle, thinking, step, done and error.
+
+    The worker thread reaches the panel only through these signals, which Qt delivers on the UI
+    thread. One worker runs at a time, because a new one starts only outside `THINKING`.
+    """
+
+    _leave_screen = Signal(object)
+    _come_back = Signal()
+    _notice = Signal(str)
+    _step_ready = Signal(object)
+    _failed = Signal(str)
+
+    def __init__(self, panel: StepPanel, build_session: SessionFactory) -> None:
+        super().__init__()
+        self.state = State.IDLE
+        self._panel = panel
+        self._build_session = build_session
+        self._session: GuideSession | None = None
+        self._goal = ""
+        self._closed = False
+
+        self._leave_screen.connect(self._on_leave_screen)
+        self._come_back.connect(self._on_come_back)
+        self._notice.connect(self._on_notice)
+        self._step_ready.connect(self._on_step_ready)
+        self._failed.connect(self._on_failed)
+        panel.goal_submitted.connect(self._on_goal)
+        panel.next_requested.connect(self._on_next)
+        panel.closed.connect(self._on_closed)
+
+        panel.show_goal_entry()
+
+    def _on_goal(self, goal: str) -> None:
+        if self.state is State.IDLE:
+            self._goal = goal
+            self._panel.set_goal(goal)
+            self._request_step()
+
+    def _on_next(self) -> None:
+        if self.state in (State.STEP, State.ERROR):
+            self._request_step()
+
+    def _request_step(self) -> None:
+        self.state = State.THINKING
+        self._panel.show_thinking()
+        # Daemon: closing the panel ends the process without waiting for a call in flight.
+        threading.Thread(target=self._produce_step, daemon=True).start()
+
+    def _produce_step(self) -> None:
+        try:
+            if self._session is None:
+                self._session = self._build_session(self._goal, self._off_screen, self._notice.emit)
+            self._step_ready.emit(self._session.next_step())
+        except GUIDE_ERRORS as exc:
+            logger.warning("step failed: %s", exc)
+            self._failed.emit(describe_guide_error(exc))
+        except Exception as exc:
+            # Nothing else would report it, and the panel would stay on "Thinking" for good.
+            logger.exception("step failed")
+            self._failed.emit(f"unexpected error: {exc}")
+
+    def _off_screen(self, capturer: ScreenCapturer) -> ScreenCapturer:
+        return _OffScreenCapturer(capturer, self._leave_screen.emit, self._come_back.emit)
+
+    def _on_leave_screen(self, gone: threading.Event) -> None:
+        self._panel.setWindowOpacity(0.0)
+        QTimer.singleShot(LEAVE_SCREEN_MS, gone.set)
+
+    def _on_come_back(self) -> None:
+        self._panel.setWindowOpacity(1.0)
+
+    def _on_notice(self, message: str) -> None:
+        if not self._closed:
+            self._panel.show_notice(message)
+
+    def _on_step_ready(self, step: Step) -> None:
+        if self._closed:
+            return
+        self.state = State.DONE if step.done else State.STEP
+        self._panel.show_step(step, step.screenshot)
+
+    def _on_failed(self, message: str) -> None:
+        if self._closed:
+            return
+        self.state = State.ERROR
+        self._panel.show_error(message)
+
+    def _on_closed(self) -> None:
+        self._closed = True
+
+
+def run_panel(build_session: SessionFactory) -> int:
+    """Show the panel and guide one task, until the panel is closed."""
+    app = start_app()
+    panel = StepPanel()
+    # Kept in a name: Qt holds no reference to it, and it has to outlive `exec`.
+    controller = GuideController(panel, build_session)
+    panel.show()
+    logger.info("panel started state=%s", controller.state.value)
+    return app.exec()
