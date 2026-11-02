@@ -5,12 +5,13 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from screenguide.capture import CaptureError, FileCapturer, PortalCapturer, ScreenCapturer
+from screenguide.capture import FileCapturer, PortalCapturer, ScreenCapturer
 from screenguide.config import ConfigError, load_config
-from screenguide.contract import InvalidModelResponse, ModelRefusal
+from screenguide.contract import ModelRefusal
 from screenguide.detection import DetectionError, RapidOcrDetector
+from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.grounding import SetOfMarkGrounding
-from screenguide.model import AnthropicProvider, ModelProviderError
+from screenguide.model import AnthropicProvider
 from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
@@ -75,43 +76,38 @@ def _with_session(
 ) -> int:
     """Build a session for the real screen, or for `image` if given, and report what fails."""
     try:
-        config = load_config()
-        capturer: ScreenCapturer = (
-            FileCapturer(image)
-            if image
-            else PortalCapturer(save_dir=config.screenshot_dir, monitor=monitor or config.monitor)
-        )
-        session = GuideSession(
-            goal=goal,
-            capturer=capturer,
-            detector=RapidOcrDetector(),
-            grounding=SetOfMarkGrounding(config.image_long_edge),
-            provider=AnthropicProvider(config.model, config.effort),
-            tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
-            notify=lambda message: print(message, file=sys.stderr),
+        session = _build_session(
+            goal, image, monitor, notify=lambda message: print(message, file=sys.stderr)
         )
         return action(session)
-    except (
-        OSError,
-        ConfigError,
-        CaptureError,
-        MonitorError,
-        DetectionError,
-        ModelProviderError,
-    ) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except GUIDE_ERRORS as exc:
+        prefix = "" if isinstance(exc, ModelRefusal) else "error: "
+        print(f"{prefix}{describe_guide_error(exc)}", file=sys.stderr)
         return 1
-    except InvalidModelResponse as exc:
-        print(f"error: invalid model response after one retry: {exc}", file=sys.stderr)
-        return 1
-    except ModelRefusal as exc:
-        print(
-            f"The model declined this request: {exc}\n"
-            "Try another model: set `model` in ~/.config/screenguide/config.toml "
-            "or SCREENGUIDE_MODEL.",
-            file=sys.stderr,
-        )
-        return 1
+
+
+def _build_session(
+    goal: str,
+    image: Path | None,
+    monitor: str | None,
+    notify: Callable[[str], None],
+    wrap_capturer: Callable[[ScreenCapturer], ScreenCapturer] = lambda capturer: capturer,
+) -> GuideSession:
+    config = load_config()
+    capturer: ScreenCapturer = (
+        FileCapturer(image)
+        if image
+        else PortalCapturer(save_dir=config.screenshot_dir, monitor=monitor or config.monitor)
+    )
+    return GuideSession(
+        goal=goal,
+        capturer=wrap_capturer(capturer),
+        detector=RapidOcrDetector(),
+        grounding=SetOfMarkGrounding(config.image_long_edge),
+        provider=AnthropicProvider(config.model, config.effort),
+        tracker=JsonlUsageTracker(config.usage_log, load_pricing()),
+        notify=notify,
+    )
 
 
 def detect(image: Path, output: Path) -> int:
@@ -133,9 +129,23 @@ def detect(image: Path, output: Path) -> int:
     return 0
 
 
-def panel(image: Path) -> int:
+def panel(monitor: str | None = None) -> int:
     try:
         # Imported here so that the other commands start without loading Qt.
+        from screenguide.panel_guide import run_panel
+
+        return run_panel(
+            lambda goal, wrap_capturer, notify: _build_session(
+                goal, None, monitor, notify, wrap_capturer
+            )
+        )
+    except (ImportError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+def panel_demo(image: Path) -> int:
+    try:
         from screenguide.panel import run_demo
 
         return run_demo(FileCapturer(image).capture())
@@ -180,10 +190,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     detect_parser.add_argument(
         "--output", type=Path, required=True, help="where to write the marked PNG"
     )
-    panel_parser = commands.add_parser("panel", help="show a ready-made step in the panel")
-    panel_parser.add_argument("--image", type=Path, required=True, help="image file to crop")
+    panel_parser = commands.add_parser("panel", help="guide a task from the panel")
+    panel_parser.add_argument("--monitor", help="connector name of the monitor to capture")
+    panel_parser.add_argument("--image", type=Path, help="image file to crop, with --demo-step")
     panel_parser.add_argument(
-        "--demo-step", action="store_true", required=True, help="show made-up steps"
+        "--demo-step", action="store_true", help="show made-up steps instead of guiding a task"
     )
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")
@@ -194,7 +205,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "detect":
         return detect(args.image, args.output)
     if args.command == "panel":
-        return panel(args.image)
+        if bool(args.image) != args.demo_step:
+            panel_parser.error("--image and --demo-step go together")
+        if args.demo_step and args.monitor:
+            panel_parser.error("--monitor does not apply to --demo-step")
+        return panel_demo(args.image) if args.demo_step else panel(args.monitor)
     if args.command == "usage":
         return usage()
     if args.command == "monitors":
