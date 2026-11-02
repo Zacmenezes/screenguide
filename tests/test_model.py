@@ -13,7 +13,7 @@ from screenguide.capture import Screenshot
 from screenguide.contract import RESPONSE_SCHEMA, parse_model_response
 from screenguide.detection import BBox, Element
 from screenguide.grounding import MarkedScreen
-from screenguide.model import AnthropicProvider, ModelProviderError, ModelRequest
+from screenguide.model import SYSTEM_PROMPT, AnthropicProvider, ModelProviderError, ModelRequest
 
 REQUEST = ModelRequest(
     goal="Open settings",
@@ -68,6 +68,17 @@ def test_request_carries_image_ids_goal_history_and_the_contract_schema():
     assert "Open settings" in text["text"]
     assert "Click File, top left." in text["text"]
     assert "7: Settings" in text["text"]
+
+
+def test_system_prompt_reaches_the_request_and_rules_out_stand_in_boxes():
+    provider, create = make_provider()
+
+    provider.complete(REQUEST)
+
+    system = create.call_args.kwargs["system"]
+    assert system == SYSTEM_PROMPT
+    assert "element_id null, the icon's name in target_label" in system
+    assert "Never use a nearby box as a stand-in" in system
 
 
 def test_sampling_parameters_and_prefill_are_not_sent():
