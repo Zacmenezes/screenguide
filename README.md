@@ -13,15 +13,17 @@ a simple panel. See [Known limits](#known-limits) before relying on it.
 
 ## What is sent to the model provider
 
-**Each step sends a screenshot of your whole screen to Anthropic.** Anything visible on it goes
-too: open documents, messages, emails, passwords shown in plain text, notifications, other
-windows and other monitors. Close or cover what you do not want to share before you ask for a
+**Each step sends a screenshot of your screen to Anthropic.** Anything visible on it goes
+too: open documents, messages, emails, passwords shown in plain text, notifications and other
+windows. Close or cover what you do not want to share before you ask for a
 step.
 
 In detail, each step sends:
 
-- the screenshot of the whole desktop, every monitor included, or of one monitor if you set
-  [`monitor`](#configuration), with numbered boxes drawn around the text found on it;
+- the screenshot of one monitor, the one the panel names on its "Next capture" line, or of the whole
+  desktop, every monitor included, if you pick "Whole desktop" in the panel (see
+  [Choose the monitor](#choose-the-monitor)), with numbered boxes drawn around the text found on
+  it;
 - the text found on the screen, as a numbered list;
 - the goal you typed and the instructions of the earlier steps.
 
@@ -97,7 +99,7 @@ Settings live in `~/.config/screenguide/config.toml`. Each one can also be set w
 | --- | --- | --- | --- |
 | `model` | `SCREENGUIDE_MODEL` | `claude-haiku-5-5` | Anthropic model to call |
 | `effort` | `SCREENGUIDE_EFFORT` | the model's own | `low`, `medium`, `high` and so on, as the model accepts |
-| `monitor` | `SCREENGUIDE_MONITOR` | whole desktop | Connector name of the one monitor to capture, from `screenguide monitors` |
+| `monitor` | `SCREENGUIDE_MONITOR` | the panel's monitor; whole desktop outside the panel | Connector name of the one monitor to capture, from `screenguide monitors`. In the panel, the starting choice |
 | `image_long_edge` | `SCREENGUIDE_IMAGE_LONG_EDGE` | `2576` | Long edge, in pixels, of the image sent to the model |
 | `screenshot_dir` | `SCREENGUIDE_SCREENSHOT_DIR` | unset: memory only | Directory where each capture is also saved |
 | `usage_log` | `SCREENGUIDE_USAGE_LOG` | `~/.local/share/screenguide/usage` | Where usage is recorded |
@@ -152,6 +154,16 @@ the language of the goal you type.
 From a terminal, `screenguide panel` opens the same panel, and `screenguide guide --goal "..."`
 runs the guide with no panel, printing each step.
 
+### Choose the monitor
+
+Each capture is cropped to one monitor, which the panel names on its "Next capture" line. By default it
+is the monitor the panel is on when you ask for the step, so dragging the panel to another monitor
+moves the next capture there. The selector beside it pins captures to one monitor, by connector and
+name as `screenguide monitors` lists them, until you pick "Follow panel" again. "Whole desktop"
+sends every monitor in one image. [`monitor`](#configuration) sets the starting choice.
+
+A pinned monitor that is unplugged gives an error in the panel, and nothing is captured or sent.
+
 ## Usage and cost
 
 Every model call is recorded in the usage log with its tokens, as the API reports them, image
@@ -179,11 +191,11 @@ screenguide usage
   `org.freedesktop.portal.Screenshot` portal and the panel runs through XWayland to stay on top;
   X11, KDE and wlroots desktops are untested
   ([#19](https://github.com/Zacmenezes/screenguide/issues/19)).
-- **Several monitors make wrong arrows likely.** Without `monitor`, the whole desktop goes in one
-  image, shrunk to fit `image_long_edge`, so the text gets small and the boxes many. In testing
-  on three monitors, the instruction named the right element on one monitor while the arrow
-  pointed at a box on another. Set `monitor` to the one you work on
-  ([#43](https://github.com/Zacmenezes/screenguide/issues/43)).
+- **"Whole desktop" makes wrong arrows likely on several monitors.** The whole desktop goes in
+  one image, shrunk to fit `image_long_edge`, so the text gets small and the boxes many. In
+  testing on three monitors, the instruction named the right element on one monitor while the
+  arrow pointed at a box on another. `screenguide run` and `guide` capture the whole desktop
+  unless `monitor` or `--monitor` is set.
 - **The screen flashes on every capture,** with GNOME's screenshot animation
   ([#35](https://github.com/Zacmenezes/screenguide/issues/35)).
 - **Steps inside an open menu:** clicking **Next step** takes focus from the app, which can close
