@@ -78,7 +78,15 @@ printf 'ANTHROPIC_API_KEY=%s\n' 'sk-ant-...' > ~/.config/environment.d/screengui
 chmod 600 ~/.config/environment.d/screenguide.conf
 ```
 
-GNOME reads this file at login, so log out and back in once.
+The systemd user manager reads this file when it starts, and logging out does not always stop
+it. Load the file into the running manager, then log out and back in so GNOME picks it up:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user show-environment | grep -c ANTHROPIC_API_KEY  # prints 1
+```
+
+A panel that was already running keeps its old environment: close it with × first.
 
 ## Configuration
 
