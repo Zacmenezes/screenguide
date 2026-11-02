@@ -1,5 +1,6 @@
 """The panel driving a real `GuideSession`, with the capture and the model stubbed."""
 
+import gc
 import io
 import json
 import os
@@ -81,6 +82,18 @@ class Capturer:
 @pytest.fixture(scope="module", autouse=True)
 def app():
     yield QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def qt_garbage_stays_on_the_ui_thread():
+    """Collect here, so the collector cannot destroy a test's widgets later on a worker thread."""
+    gc.collect()
+    yield
+    for thread in threading.enumerate():
+        if thread is not threading.main_thread():
+            thread.join(5)
+    QApplication.processEvents()
+    gc.collect()
 
 
 @pytest.fixture(autouse=True)
