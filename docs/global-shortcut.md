@@ -41,7 +41,8 @@ fi
 
 A panel started by the shortcut does not see variables set in your shell profile either. Keep the
 Anthropic credentials where a GNOME process can read them: `ant auth login`, or
-`ANTHROPIC_API_KEY=...` in `~/.config/environment.d/screenguide.conf` (read at the next login).
+`ANTHROPIC_API_KEY=...` in `~/.config/environment.d/screenguide.conf`, loaded as the
+README describes.
 The same goes for `SCREENGUIDE_*` settings, which also fit in `~/.config/screenguide/config.toml`.
 
 ## Why not the GlobalShortcuts portal
