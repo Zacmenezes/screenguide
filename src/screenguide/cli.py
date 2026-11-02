@@ -11,6 +11,7 @@ from screenguide.contract import ModelRefusal
 from screenguide.detection import DetectionError, RapidOcrDetector
 from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.grounding import SetOfMarkGrounding
+from screenguide.instance import InstanceError, claim_or_send
 from screenguide.model import AnthropicProvider
 from screenguide.monitors import MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
@@ -129,19 +130,36 @@ def detect(image: Path, output: Path) -> int:
     return 0
 
 
-def panel(monitor: str | None = None) -> int:
+def panel(monitor: str | None = None, command: str = "show") -> int:
+    """Run the panel, or hand `command` to the one already running."""
     try:
-        # Imported here so that the other commands start without loading Qt.
-        from screenguide.panel_guide import run_panel
-
-        return run_panel(
-            lambda goal, wrap_capturer, notify: _build_session(
-                goal, None, monitor, notify, wrap_capturer
-            )
-        )
-    except (ImportError, OSError) as exc:
+        listener = claim_or_send(command)
+    except InstanceError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if listener is None:
+        if monitor:
+            print("screenguide is already running; --monitor applies to a new one", file=sys.stderr)
+        return 0
+    with listener:
+        try:
+            # Imported here so that the other commands, and a launch that only forwards, start
+            # without loading Qt.
+            from screenguide.panel_guide import run_panel
+
+            return run_panel(
+                lambda goal, wrap_capturer, notify: _build_session(
+                    goal, None, monitor, notify, wrap_capturer
+                ),
+                listener,
+            )
+        except (ImportError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+
+def toggle() -> int:
+    return panel(command="toggle")
 
 
 def panel_demo(image: Path) -> int:
@@ -196,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     panel_parser.add_argument(
         "--demo-step", action="store_true", help="show made-up steps instead of guiding a task"
     )
+    commands.add_parser("toggle", help="show or hide the running panel, starting one if none runs")
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")
 
@@ -210,6 +229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.demo_step and args.monitor:
             panel_parser.error("--monitor does not apply to --demo-step")
         return panel_demo(args.image) if args.demo_step else panel(args.monitor)
+    if args.command == "toggle":
+        return toggle()
     if args.command == "usage":
         return usage()
     if args.command == "monitors":

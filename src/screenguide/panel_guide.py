@@ -1,14 +1,16 @@
 """`layer:ui`: runs a guide session from the panel, with slow work off the UI thread."""
 
 import logging
+import socket
 import threading
 from collections.abc import Callable
 from enum import Enum
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QSocketNotifier, QTimer, Signal
 
 from screenguide.capture import ScreenCapturer, Screenshot
 from screenguide.errors import GUIDE_ERRORS, describe_guide_error
+from screenguide.instance import receive
 from screenguide.panel import StepPanel, start_app
 from screenguide.session import GuideSession, Step
 
@@ -149,12 +151,30 @@ class GuideController(QObject):
         self._closed = True
 
 
-def run_panel(build_session: SessionFactory) -> int:
-    """Show the panel and guide one task, until the panel is closed."""
+def obey(panel: StepPanel, command: str) -> None:
+    """Carry out a command that a later `screenguide` launch sent to this instance."""
+    logger.info("instance command received command=%s", command)
+    if command == "toggle":
+        panel.toggle()
+    else:
+        panel.appear()
+
+
+def run_panel(build_session: SessionFactory, listener: socket.socket) -> int:
+    """Show the panel and guide one task, until the panel is closed.
+
+    Meanwhile, every command a later launch sends through `listener` shows or hides the panel.
+    """
     app = start_app()
     panel = StepPanel()
-    # Kept in a name: Qt holds no reference to it, and it has to outlive `exec`.
+    # Kept in names: Qt holds no reference to them, and they have to outlive `exec`.
     controller = GuideController(panel, build_session)
-    panel.show()
+    notifier = QSocketNotifier(listener.fileno(), QSocketNotifier.Type.Read)
+    notifier.activated.connect(lambda: [obey(panel, command) for command in receive(listener)])
+    panel.appear()
     logger.info("panel started state=%s", controller.state.value)
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # The caller closes the socket next; a notifier still watching it would complain.
+        notifier.setEnabled(False)

@@ -445,3 +445,145 @@ def test_panel_command_guides_with_the_real_wiring(image, monkeypatch):
 def test_panel_command_rejects_mixed_options(extra):
     with pytest.raises(SystemExit):
         main(["panel", *extra])
+
+
+def test_hiding_and_showing_again_keeps_the_session(guide):
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+    instruction = g.panel.instruction.text()
+
+    g.panel.toggle()
+    assert not g.panel.isVisible()
+    assert g.controller.state is State.STEP
+
+    g.panel.toggle()
+    assert g.panel.isVisible()
+    assert g.panel.instruction.text() == instruction
+    assert g.panel._goal.text() == "Open settings"
+
+    g.panel.next_button.click()
+    g.wait_for(State.STEP)
+    assert g.provider.requests[-1].history == ("Click File, in the top menu.",)
+    assert len(g.goals) == 1
+
+
+def test_step_that_arrives_while_hidden_waits_for_the_panel_to_come_back(guide):
+    g = guide(reply())
+    g.provider.release.clear()
+    g.start()
+    wait_until(lambda: g.provider.requests)
+
+    g.panel.toggle()
+    g.provider.release.set()
+    g.wait_for(State.STEP)
+
+    assert not g.panel.isVisible()
+    g.panel.toggle()
+    assert g.panel.isVisible() and g.panel.windowOpacity() == 1.0
+    assert ">Settings</span>" in g.panel.instruction.text()
+
+
+def goal_field_has_focus(panel):
+    """The widget that takes the keys once the window is active.
+
+    The offscreen platform never activates a window again after hiding it, so tests check this
+    rather than `hasFocus`. On xcb under GNOME, the reactivated panel gives the keys to that field.
+    """
+    return panel.focusWidget() is panel.goal_input
+
+
+def test_showing_focuses_the_goal_field_and_keeps_what_was_typed(guide):
+    g = guide()
+    g.panel.goal_input.setText("Open sett")
+    g.panel.start_button.setFocus()
+    g.panel.toggle()
+    QApplication.processEvents()
+
+    g.panel.toggle()
+
+    assert goal_field_has_focus(g.panel)
+    assert g.panel.goal_input.text() == "Open sett"
+
+
+def test_show_command_never_hides(guide):
+    g = guide()
+
+    panel_guide.obey(g.panel, "show")
+    panel_guide.obey(g.panel, "show")
+    assert g.panel.isVisible()
+    panel_guide.obey(g.panel, "toggle")
+    assert not g.panel.isVisible()
+    panel_guide.obey(g.panel, "show")
+    assert g.panel.isVisible()
+
+
+@pytest.fixture
+def real_loop(monkeypatch):
+    """`screenguide panel` or `toggle` as launched, with `exec` running `body` instead."""
+    monkeypatch.setattr("signal.signal", lambda *args: None)
+    shown = []
+    original_init = StepPanel.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        shown.append(self)
+
+    monkeypatch.setattr(StepPanel, "__init__", init)
+
+    def run(body):
+        monkeypatch.setattr(QApplication, "exec", lambda self=None: body(shown[0]) or 0)
+
+    return run
+
+
+@pytest.mark.parametrize("command", ["toggle", "panel"])
+def test_first_launch_shows_the_panel_and_later_launches_toggle_it(real_loop, command):
+    seen = {}
+
+    def body(panel):
+        seen["first"] = panel.isVisible() and goal_field_has_focus(panel)
+        panel.goal_input.setText("Open settings")
+        panel.start_button.setFocus()
+
+        assert main(["toggle"]) == 0
+        wait_until(lambda: not panel.isVisible())
+        assert main(["toggle"]) == 0
+        wait_until(panel.isVisible)
+        assert goal_field_has_focus(panel)
+        assert main(["panel"]) == 0
+        assert main(["toggle"]) == 0
+        wait_until(lambda: not panel.isVisible())
+        assert main(["panel"]) == 0
+        wait_until(panel.isVisible)
+        seen["goal"] = panel.goal_input.text()
+
+    real_loop(body)
+
+    assert main([command]) == 0
+    assert seen == {"first": True, "goal": "Open settings"}
+
+
+def test_later_launch_only_forwards_and_says_its_monitor_does_not_apply(capsys):
+    from screenguide.instance import claim_or_send, receive
+
+    listener = claim_or_send("show")
+    try:
+        assert main(["panel", "--monitor", "DP-3"]) == 0
+        assert main(["toggle"]) == 0
+        time.sleep(0.05)
+        assert receive(listener) == ["show", "toggle"]
+    finally:
+        listener.close()
+    assert "already running" in capsys.readouterr().err
+
+
+def test_instance_is_released_when_the_panel_ends(real_loop):
+    from screenguide.instance import claim_or_send
+
+    real_loop(lambda panel: None)
+    assert main(["toggle"]) == 0
+
+    listener = claim_or_send("show")
+    assert listener is not None
+    listener.close()

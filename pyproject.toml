@@ -23,7 +23,7 @@ dependencies = [
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-screenguide = "screenguide.cli:main"
+screenguide = "screenguide.launcher:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/screenguide"]
