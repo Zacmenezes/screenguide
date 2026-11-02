@@ -183,8 +183,10 @@ scores whether the chosen element hit the right box. A case is one line of a JSO
 ```
 
 `image` is relative to the cases file; `history` holds the instructions already shown;
-`correct_bbox` is in pixels of the original image. A hit is a chosen box that overlaps
-`correct_bbox`. A malformed line or a missing image is reported with its line number and skipped.
+`correct_bbox` is in pixels of the original image, or `null` for a case not yet labelled. A hit
+is a chosen box that overlaps `correct_bbox`. A malformed line or a missing image is reported
+with its line number and skipped; an unlabelled case is skipped without a model call, and the
+summary counts the two apart.
 
 ```sh
 screenguide eval eval/cases.jsonl --limit 2

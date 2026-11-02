@@ -160,11 +160,14 @@ def evaluate(
     except (OSError, UnicodeDecodeError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    for line in skipped:
+    malformed = [line for line in skipped if not line.unlabelled]
+    unlabelled = len(skipped) - len(malformed)
+    for line in malformed:
         print(f"{cases_file}:{line.line}: skipped: {line.reason}", file=sys.stderr)
+    skipped_note = f"skipped: {unlabelled} unlabelled, {len(malformed)} malformed"
     cases = cases[:limit] if limit is not None else cases
     if not cases:
-        print("error: no cases to run", file=sys.stderr)
+        print(f"error: no labelled cases to run ({skipped_note})", file=sys.stderr)
         return 1
 
     provider = layers.provider
@@ -218,7 +221,7 @@ def evaluate(
         summary = run_eval(
             cases, new_session, layers.tracker, layers.pricing, settings, run_file, progress
         )
-    print(f"{summary.format()}\nrun file: {path}")
+    print(f"{summary.format()}\n{skipped_note}\nrun file: {path}")
     return 0
 
 

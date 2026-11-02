@@ -33,6 +33,10 @@ class CaseError(ValueError):
     """A line of the cases file cannot be used."""
 
 
+class UnlabelledCase(Exception):
+    """A well-formed case whose `correct_bbox` is still null: it waits for a label."""
+
+
 @dataclass(frozen=True)
 class Case:
     line: int
@@ -46,6 +50,7 @@ class Case:
 class SkippedLine:
     line: int
     reason: str
+    unlabelled: bool = False  # Not malformed: `correct_bbox` is null until the case is labelled.
 
 
 @dataclass(frozen=True)
@@ -66,7 +71,10 @@ class CaseResult:
 
 
 def load_cases(path: Path) -> tuple[list[Case], list[SkippedLine]]:
-    """Read one case per line. `image` is relative to the cases file. Blank lines are ignored."""
+    """Read one case per line. `image` is relative to the cases file. Blank lines are ignored.
+
+    A case with `"correct_bbox": null` is skipped as unlabelled, apart from malformed lines.
+    """
     cases = []
     skipped = []
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -76,6 +84,8 @@ def load_cases(path: Path) -> tuple[list[Case], list[SkippedLine]]:
             cases.append(_parse_case(number, line, path.parent))
         except CaseError as exc:
             skipped.append(SkippedLine(number, str(exc)))
+        except UnlabelledCase:
+            skipped.append(SkippedLine(number, "no correct_bbox yet", unlabelled=True))
     return cases, skipped
 
 
@@ -99,6 +109,8 @@ def _parse_case(number: int, line: str, base: Path) -> Case:
     image_path = base / image
     if not image_path.is_file():
         raise CaseError(f"image not found: {image_path}")
+    if "correct_bbox" in raw and raw["correct_bbox"] is None:
+        raise UnlabelledCase()
     return Case(number, image_path, goal, tuple(history), _parse_bbox(raw.get("correct_bbox")))
 
 

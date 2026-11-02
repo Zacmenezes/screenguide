@@ -208,6 +208,40 @@ def test_malformed_lines_and_missing_images_are_reported_and_skipped(image, prov
     assert [result["line"] for result in results] == [5]
 
 
+def test_an_unlabelled_case_is_skipped_apart_from_malformed_lines(image, provider, capsys):
+    cases = write_cases(image.parent, case("miss", bbox=None), "{not json", case("hit"))
+
+    assert main(["eval", str(cases)]) == 0
+
+    assert provider.calls == ["hit"]
+    _, _, results = read_run(image.parent)
+    assert [result["line"] for result in results] == [3]
+    captured = capsys.readouterr()
+    assert "cases run: 1\n" in captured.out
+    assert "skipped: 1 unlabelled, 1 malformed" in captured.out
+    assert f"{cases}:1:" not in captured.err
+
+
+def test_only_an_explicit_null_marks_a_case_unlabelled(image, provider, capsys):
+    unlabelled = {"image": "screen.png", "goal": "hit", "history": []}
+    cases = write_cases(image.parent, unlabelled, case("hit"))
+
+    assert main(["eval", str(cases)]) == 0
+
+    assert f"{cases}:1: skipped: correct_bbox" in capsys.readouterr().err
+
+
+def test_a_file_of_unlabelled_cases_has_nothing_to_run(image, provider, capsys):
+    cases = write_cases(image.parent, case("hit", bbox=None))
+
+    assert main(["eval", str(cases)]) == 1
+
+    assert provider.calls == []
+    assert (
+        "no labelled cases to run (skipped: 1 unlabelled, 0 malformed)" in capsys.readouterr().err
+    )
+
+
 def test_calls_go_to_the_usage_log_under_one_session_per_run(image, provider, usage_log):
     cases = write_cases(image.parent, case("hit"), case("retry"))
 
