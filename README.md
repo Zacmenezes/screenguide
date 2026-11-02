@@ -182,7 +182,8 @@ screenguide usage
 - **Several monitors make wrong arrows likely.** Without `monitor`, the whole desktop goes in one
   image, shrunk to fit `image_long_edge`, so the text gets small and the boxes many. In testing
   on three monitors, the instruction named the right element on one monitor while the arrow
-  pointed at a box on another. Set `monitor` to the one you work on.
+  pointed at a box on another. Set `monitor` to the one you work on
+  ([#43](https://github.com/Zacmenezes/screenguide/issues/43)).
 - **The screen flashes on every capture,** with GNOME's screenshot animation
   ([#35](https://github.com/Zacmenezes/screenguide/issues/35)).
 - **Steps inside an open menu:** clicking **Next step** takes focus from the app, which can close
