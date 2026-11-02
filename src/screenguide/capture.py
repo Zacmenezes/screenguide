@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,7 +21,14 @@ from jeepney import (
 )
 from jeepney.io.blocking import Proxy, open_dbus_connection
 
-from screenguide.monitors import MonitorError, crop_to_monitor, find_monitor, read_monitors
+from screenguide.monitors import (
+    WHOLE_DESKTOP,
+    MonitorChoice,
+    MonitorError,
+    crop_to_monitor,
+    pick_monitor,
+    read_monitors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,24 +75,26 @@ class PortalCapturer:
     """Captures through `org.freedesktop.portal.Screenshot`.
 
     The portal hands over a file, so the capture is read into memory and that file is removed.
-    The portal returns the whole desktop as one image. With a monitor chosen, that image is cropped
-    to it before anything else sees or saves it; with none, the whole desktop is the capture.
+    The portal returns the whole desktop as one image. `choose_monitor` is asked at each capture
+    which monitor to keep; the image is cropped to it before anything else sees or saves it. With
+    no monitor chosen, the whole desktop is the capture.
     """
 
     def __init__(
         self,
         save_dir: Path | None = None,
         response_timeout: float = RESPONSE_TIMEOUT_SECONDS,
-        monitor: str | None = None,
+        choose_monitor: Callable[[], MonitorChoice] = lambda: WHOLE_DESKTOP,
     ) -> None:
         self._save_dir = save_dir
         self._response_timeout = response_timeout
-        self._monitor = monitor
+        self._choose_monitor = choose_monitor
 
     def capture(self) -> Screenshot:
         # Checked first, so a wrong name or a missing layout API never takes a screenshot.
-        monitors = read_monitors() if self._monitor else []
-        chosen = find_monitor(self._monitor, monitors) if self._monitor else None
+        choice = self._choose_monitor()
+        monitors = read_monitors() if choice.connector else []
+        chosen = pick_monitor(choice, monitors) if choice.connector else None
 
         path = _path_from_uri(_request_screenshot(self._response_timeout))
         try:
@@ -108,6 +118,12 @@ class PortalCapturer:
             _save(data, self._save_dir, suffix)
         width, height = _png_size(data)
         return Screenshot(data=data, width=width, height=height)
+
+
+def pinned(connector: str | None) -> Callable[[], MonitorChoice]:
+    """Always the same monitor, or always the whole desktop when `connector` is `None`."""
+    choice = MonitorChoice(connector)
+    return lambda: choice
 
 
 def _request_screenshot(response_timeout: float) -> str:

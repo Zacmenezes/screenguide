@@ -5,7 +5,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from screenguide.capture import FileCapturer, PortalCapturer, ScreenCapturer
+from screenguide.capture import FileCapturer, PortalCapturer, ScreenCapturer, pinned
 from screenguide.config import ConfigError, load_config
 from screenguide.contract import ModelRefusal
 from screenguide.detection import DetectionError, RapidOcrDetector
@@ -13,7 +13,7 @@ from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.grounding import SetOfMarkGrounding
 from screenguide.instance import InstanceError, claim_or_send
 from screenguide.model import AnthropicProvider
-from screenguide.monitors import MonitorError, format_monitors, read_monitors
+from screenguide.monitors import MonitorChoice, MonitorError, format_monitors, read_monitors
 from screenguide.pricing import load_pricing
 from screenguide.session import GuideSession, Step
 from screenguide.usage import JsonlUsageTracker, read_usage_log, summarize
@@ -93,12 +93,17 @@ def _build_session(
     monitor: str | None,
     notify: Callable[[str], None],
     wrap_capturer: Callable[[ScreenCapturer], ScreenCapturer] = lambda capturer: capturer,
+    choose_monitor: Callable[[], MonitorChoice] | None = None,
 ) -> GuideSession:
+    """`choose_monitor` decides each capture's monitor; without it, `monitor` or the config does."""
     config = load_config()
     capturer: ScreenCapturer = (
         FileCapturer(image)
         if image
-        else PortalCapturer(save_dir=config.screenshot_dir, monitor=monitor or config.monitor)
+        else PortalCapturer(
+            save_dir=config.screenshot_dir,
+            choose_monitor=choose_monitor or pinned(monitor or config.monitor),
+        )
     )
     return GuideSession(
         goal=goal,
@@ -143,17 +148,20 @@ def panel(monitor: str | None = None, command: str = "show") -> int:
         return 0
     with listener:
         try:
+            starting_monitor = monitor or load_config().monitor
             # Imported here so that the other commands, and a launch that only forwards, start
             # without loading Qt.
             from screenguide.panel_guide import run_panel
 
             return run_panel(
-                lambda goal, wrap_capturer, notify: _build_session(
-                    goal, None, monitor, notify, wrap_capturer
+                lambda goal, wrap_capturer, notify, choose_monitor: _build_session(
+                    goal, None, None, notify, wrap_capturer, choose_monitor
                 ),
                 listener,
+                read_monitors,
+                starting_monitor,
             )
-        except (ImportError, OSError) as exc:
+        except (ImportError, OSError, ConfigError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 

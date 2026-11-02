@@ -17,15 +17,17 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from conftest import ELEMENTS, FixedDetector  # noqa: E402
 from screenguide import panel_guide  # noqa: E402
-from screenguide.capture import CaptureError, Screenshot  # noqa: E402
+from screenguide.capture import CaptureError, PortalCapturer, Screenshot  # noqa: E402
 from screenguide.cli import main  # noqa: E402
 from screenguide.grounding import SetOfMarkGrounding  # noqa: E402
 from screenguide.model import STOP_REFUSAL, ModelProviderError, ModelReply  # noqa: E402
-from screenguide.panel import StepPanel  # noqa: E402
+from screenguide.monitors import MonitorChoice  # noqa: E402
+from screenguide.panel import Pick, StepPanel  # noqa: E402
 from screenguide.panel_guide import GuideController, State  # noqa: E402
 from screenguide.pricing import PricingTable  # noqa: E402
 from screenguide.session import GuideSession  # noqa: E402
 from screenguide.usage import JsonlUsageTracker  # noqa: E402
+from test_monitors import MIXED, Requests  # noqa: E402
 
 
 def reply(label="Settings", element_id=2, done=False):
@@ -101,6 +103,20 @@ def short_settle(monkeypatch):
     monkeypatch.setattr(panel_guide, "LEAVE_SCREEN_MS", 1)
 
 
+@pytest.fixture(autouse=True)
+def layout(monkeypatch):
+    """The layout `screenguide panel` lists, faked so no test reads the real one."""
+    monkeypatch.setattr("screenguide.cli.read_monitors", lambda: MIXED)
+
+
+@pytest.fixture
+def screen(monkeypatch):
+    """The panel's screen, as Qt would name it; tests drag the panel by changing it."""
+    where = {"name": "DP-4"}
+    monkeypatch.setattr(StepPanel, "screen_name", lambda self: where["name"])
+    return where
+
+
 class Guide:
     def __init__(self, provider, usage_log, factory=None):
         self.panel = StepPanel()
@@ -108,7 +124,7 @@ class Guide:
         self.provider = provider
         self.goals = []
 
-        def build(goal, wrap, notify):
+        def build(goal, wrap, notify, choose_monitor):
             self.goals.append(goal)
             return GuideSession(
                 goal=goal,
@@ -353,7 +369,7 @@ def test_session_that_could_not_be_built_is_retried(usage_log):
     attempts = []
     panel_holder = {}
 
-    def factory(goal, wrap, notify):
+    def factory(goal, wrap, notify, choose_monitor):
         attempts.append(goal)
         if len(attempts) == 1:
             raise OSError("no config")
@@ -380,7 +396,7 @@ def test_session_that_could_not_be_built_is_retried(usage_log):
 
 
 def test_unexpected_exception_does_not_leave_the_panel_thinking(usage_log):
-    def factory(goal, wrap, notify):
+    def factory(goal, wrap, notify, choose_monitor):
         raise ValueError("a bug")
 
     g = Guide(None, usage_log, factory)
@@ -433,8 +449,120 @@ def test_panel_command_guides_with_the_real_wiring(image, monkeypatch):
     monkeypatch.setattr(QApplication, "exec", run_until_step)
 
     assert main(["panel", "--monitor", "DP-3"]) == 0
-    assert capturer_kwargs[0]["monitor"] == "DP-3"
+    assert capturer_kwargs[0]["choose_monitor"]() == MonitorChoice("DP-3")
     assert ">File</span>" in shown[0].instruction.text()
+
+
+class PortalGuide(Guide):
+    """The panel driving the real `PortalCapturer`, with the portal and Mutter faked."""
+
+    def __init__(self, monkeypatch, tmp_path, usage_log, replies, monitor=None):
+        self.requests = Requests(monkeypatch, tmp_path)
+        self.sizes = []
+
+        def build(goal, wrap, notify, choose_monitor):
+            portal = PortalCapturer(choose_monitor=choose_monitor)
+
+            class Measured:
+                def capture(inner):
+                    screenshot = portal.capture()
+                    self.sizes.append((screenshot.width, screenshot.height))
+                    return screenshot
+
+            return GuideSession(
+                goal=goal,
+                capturer=wrap(Measured()),
+                detector=FixedDetector(ELEMENTS),
+                grounding=SetOfMarkGrounding(),
+                provider=self.provider,
+                tracker=JsonlUsageTracker(usage_log, PricingTable({})),
+                notify=notify,
+            )
+
+        self.panel = StepPanel(monitor=monitor)
+        self.panel.set_monitors(MIXED)
+        self.provider = Provider(*replies)
+        self.goals = []
+        self.controller = GuideController(self.panel, build)
+        self.panel.show()
+
+
+def test_captures_follow_the_panel_to_another_monitor(monkeypatch, tmp_path, usage_log, screen):
+    g = PortalGuide(monkeypatch, tmp_path, usage_log, [reply(), reply()])
+
+    g.start()
+    g.wait_for(State.STEP)
+    screen["name"] = "DP-3"
+    g.panel.next_button.click()
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    assert g.sizes == [(3200, 1350), (2400, 1350)]
+
+
+def test_pinned_monitor_stays_when_the_panel_moves(monkeypatch, tmp_path, usage_log, screen):
+    g = PortalGuide(monkeypatch, tmp_path, usage_log, [reply()])
+    g.panel.select_monitor("DP-3")
+    screen["name"] = "eDP-1"
+
+    g.start()
+    g.wait_for(State.STEP)
+
+    assert g.sizes == [(2400, 1350)]
+
+
+def test_whole_desktop_chosen_in_the_panel(monkeypatch, tmp_path, usage_log, screen):
+    g = PortalGuide(monkeypatch, tmp_path, usage_log, [reply()])
+    g.panel.select_monitor(Pick.WHOLE_DESKTOP)
+
+    g.start()
+    g.wait_for(State.STEP)
+
+    assert g.sizes == [(5120, 2700)]
+
+
+@pytest.mark.parametrize(
+    ("monitor", "screen_name", "message"),
+    [
+        ("HDMI-9", "DP-4", "monitor HDMI-9 is not connected"),
+        (None, "XWAYLAND0", "cannot tell which monitor the panel is on"),
+    ],
+    ids=["pinned-disconnected", "screen-not-in-layout"],
+)
+def test_missing_monitor_is_an_error_in_the_panel_and_sends_nothing(
+    monkeypatch, tmp_path, usage_log, screen, monitor, screen_name, message
+):
+    g = PortalGuide(monkeypatch, tmp_path, usage_log, [reply()], monitor=monitor)
+    screen["name"] = screen_name
+
+    g.start()
+    g.wait_for(State.ERROR)
+
+    assert message in g.panel.error.text()
+    assert g.requests.screenshots == 0
+    assert g.provider.requests == []
+    assert g.panel.windowOpacity() == 1.0
+
+
+@pytest.mark.parametrize(
+    ("environment", "argv", "expected"),
+    [
+        ({}, [], "Follow panel"),
+        ({"SCREENGUIDE_MONITOR": "DP-3"}, [], "DP-3  Some display"),
+        ({"SCREENGUIDE_MONITOR": "DP-3"}, ["--monitor", "eDP-1"], "eDP-1  Built-in display"),
+    ],
+    ids=["no-choice-follows", "from-config", "option-over-config"],
+)
+def test_starting_choice_comes_from_option_or_config(
+    real_loop, monkeypatch, environment, argv, expected
+):
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    seen = []
+    real_loop(lambda panel: seen.append(panel.monitor_selector.currentText()))
+
+    assert main(["panel", *argv]) == 0
+    assert seen == [expected]
 
 
 @pytest.mark.parametrize(
