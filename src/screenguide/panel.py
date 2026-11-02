@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import signal
+from enum import Enum
 
 from PIL import Image
 from PySide6.QtCore import QPointF, Qt, Signal
@@ -12,6 +13,7 @@ from PySide6.QtGui import (
     QColor,
     QImage,
     QMouseEvent,
+    QMoveEvent,
     QPainter,
     QPaintEvent,
     QPen,
@@ -20,6 +22,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -30,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from screenguide.capture import Screenshot
 from screenguide.detection import BBox, decode_image
+from screenguide.monitors import WHOLE_DESKTOP, Monitor, MonitorChoice
 from screenguide.session import Step
 from screenguide.step_view import CROP_WIDTH, CropView, crop_view, highlight_instruction
 
@@ -47,7 +51,14 @@ STYLE = f"""
     QLabel#instruction {{ font-size: 15px; }}
     QLabel#status {{ color: {ACCENT}; font-size: 15px; font-weight: 600; }}
     QLabel#error {{ color: #fca5a5; }}
-    QLabel#notice {{ color: #a1a1aa; font-size: 12px; }}
+    QLabel#notice, QLabel#source {{ color: #a1a1aa; font-size: 12px; }}
+    QComboBox {{
+        color: #f4f4f5; background: rgba(255, 255, 255, 18);
+        border: 1px solid #52525b; border-radius: 8px; padding: 3px 8px; font-size: 12px;
+    }}
+    QComboBox QAbstractItemView {{
+        color: #f4f4f5; background: #18181b; selection-background-color: #3f3f46;
+    }}
     QLineEdit {{
         color: #f4f4f5; background: rgba(255, 255, 255, 18);
         border: 1px solid #52525b; border-radius: 8px; padding: 7px 10px;
@@ -62,6 +73,18 @@ STYLE = f"""
 """
 
 
+class Pick(Enum):
+    """Selector entries that are not a single monitor."""
+
+    FOLLOW_PANEL = "Follow panel"
+    WHOLE_DESKTOP = "Whole desktop"
+
+
+def monitor_label(monitor: Monitor) -> str:
+    """Connector and name, as `screenguide monitors` shows them."""
+    return f"{monitor.connector}  {monitor.display_name}".rstrip()
+
+
 class StepPanel(QWidget):
     """Shows what it is told and reports what the user does, leaving the rest to its owner."""
 
@@ -69,7 +92,7 @@ class StepPanel(QWidget):
     next_requested = Signal()
     closed = Signal()
 
-    def __init__(self, goal: str = "") -> None:
+    def __init__(self, goal: str = "", monitor: str | None = None) -> None:
         super().__init__(
             None,
             Qt.WindowType.Window
@@ -89,6 +112,21 @@ class StepPanel(QWidget):
         header = QHBoxLayout()
         header.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignTop)
         header.addWidget(self._goal, stretch=1)
+
+        # Hidden until `set_monitors`: a panel that captures nothing has nothing to choose.
+        self._monitors: list[Monitor] = []
+        self.monitor_selector = QComboBox()
+        self.monitor_selector.setToolTip("Monitor to capture")
+        self.monitor_selector.currentIndexChanged.connect(self._show_capture_source)
+        self.capture_source = QLabel(objectName="source")
+        self.capture_source.setTextFormat(Qt.TextFormat.PlainText)
+        self._source_row = QWidget()
+        source_row = QHBoxLayout(self._source_row)
+        source_row.setContentsMargins(0, 0, 0, 0)
+        source_row.addWidget(self.capture_source, stretch=1)
+        source_row.addWidget(self.monitor_selector)
+        self._source_row.hide()
+        self._selection: Pick | str = monitor or Pick.FOLLOW_PANEL
 
         self.goal_input = QLineEdit(placeholderText="What do you want to do?")
         self.goal_input.returnPressed.connect(self._submit_goal)
@@ -117,6 +155,7 @@ class StepPanel(QWidget):
         self._layout.setContentsMargins(MARGIN, MARGIN - 6, MARGIN, MARGIN - 6)
         self._layout.setSpacing(12)
         self._layout.addLayout(header)
+        self._layout.addWidget(self._source_row)
         self._layout.addWidget(self._entry)
         self._layout.addWidget(self.status)
         self._layout.addWidget(self.error)
@@ -125,6 +164,9 @@ class StepPanel(QWidget):
         self._layout.addWidget(self.notice)
         self._layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self._show_only()
+        # Qt settles the window's screen after the move event, so the move alone reads it too soon.
+        self.create()
+        self.windowHandle().screenChanged.connect(lambda _screen: self._show_capture_source())
 
     def appear(self) -> None:
         """Show the panel in front, ready for the goal if it is asking for one."""
@@ -184,6 +226,62 @@ class StepPanel(QWidget):
             self.crop.setPixmap(render_crop(image, view, self.devicePixelRatioF()))
         self._fit()
 
+    def set_monitors(self, monitors: list[Monitor]) -> None:
+        """List these monitors in the selector, keeping what is selected."""
+        self._monitors = list(monitors)
+        connectors = [monitor.connector for monitor in monitors]
+        selector = self.monitor_selector
+        selector.blockSignals(True)
+        selector.clear()
+        selector.addItem(Pick.FOLLOW_PANEL.value, Pick.FOLLOW_PANEL)
+        for monitor in sorted(monitors, key=lambda item: item.connector):
+            selector.addItem(monitor_label(monitor), monitor.connector)
+        if isinstance(self._selection, str) and self._selection not in connectors:
+            # Kept, so the choice stays visible and the next capture reports it missing.
+            selector.addItem(f"{self._selection}  (not connected)", self._selection)
+        selector.addItem(Pick.WHOLE_DESKTOP.value, Pick.WHOLE_DESKTOP)
+        selector.setCurrentIndex(selector.findData(self._selection))
+        selector.blockSignals(False)
+        self._source_row.show()
+        self._show_capture_source()
+        self._fit()
+
+    def select_monitor(self, selection: Pick | str) -> None:
+        """Select an entry of the selector, as the user would."""
+        self.monitor_selector.setCurrentIndex(self.monitor_selector.findData(selection))
+
+    def monitor_choice(self) -> MonitorChoice:
+        """The monitor the next capture is from, read from the panel as it is now."""
+        if self._selection is Pick.WHOLE_DESKTOP:
+            return WHOLE_DESKTOP
+        if self._selection is Pick.FOLLOW_PANEL:
+            return MonitorChoice(self.screen_name(), follows_panel=True)
+        return MonitorChoice(self._selection)
+
+    def screen_name(self) -> str:
+        """The panel's screen as Qt names it. Through XWayland on GNOME, a Mutter connector."""
+        return self.screen().name()
+
+    def _show_capture_source(self) -> None:
+        data = self.monitor_selector.currentData()
+        if data is not None:
+            self._selection = data
+        choice = self.monitor_choice()
+        monitor = next(
+            (item for item in self._monitors if item.connector == choice.connector), None
+        )
+        if choice.connector is None:
+            source = "the whole desktop, every monitor"
+        elif monitor is None and choice.follows_panel:
+            source = f"screen {choice.connector}, which matches no monitor"
+        elif monitor is None:
+            source = f"{choice.connector}, not connected"
+        else:
+            source = monitor_label(monitor) + (
+                ", where the panel is" if choice.follows_panel else ""
+            )
+        self.capture_source.setText(f"Next capture: {source}")
+
     def _show_only(self, *shown: QWidget) -> None:
         for widget in (
             self._entry,
@@ -206,6 +304,11 @@ class StepPanel(QWidget):
         goal = self.goal_input.text().strip()
         if goal:
             self.goal_submitted.emit(goal)
+
+    def moveEvent(self, event: QMoveEvent) -> None:
+        # Dragged to another monitor, the panel follows it with the next capture.
+        super().moveEvent(event)
+        self._show_capture_source()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.closed.emit()

@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QSocketNotifier, QTimer, Signal
 from screenguide.capture import ScreenCapturer, Screenshot
 from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.instance import receive
+from screenguide.monitors import Monitor, MonitorChoice, MonitorError
 from screenguide.panel import StepPanel, start_app
 from screenguide.session import GuideSession, Step
 
@@ -21,7 +22,8 @@ LEAVE_SCREEN_MS = 100
 
 CapturerWrapper = Callable[[ScreenCapturer], ScreenCapturer]
 Notify = Callable[[str], None]
-SessionFactory = Callable[[str, CapturerWrapper, Notify], GuideSession]
+ChooseMonitor = Callable[[], MonitorChoice]
+SessionFactory = Callable[[str, CapturerWrapper, Notify, ChooseMonitor], GuideSession]
 
 
 class State(Enum):
@@ -80,6 +82,7 @@ class GuideController(QObject):
         self._session: GuideSession | None = None
         self._goal = ""
         self._closed = False
+        self._monitor_choice = panel.monitor_choice()
 
         self._leave_screen.connect(self._on_leave_screen)
         self._come_back.connect(self._on_come_back)
@@ -111,7 +114,9 @@ class GuideController(QObject):
     def _produce_step(self) -> None:
         try:
             if self._session is None:
-                self._session = self._build_session(self._goal, self._off_screen, self._notice.emit)
+                self._session = self._build_session(
+                    self._goal, self._off_screen, self._notice.emit, self._chosen_monitor
+                )
             self._step_ready.emit(self._session.next_step())
         except GUIDE_ERRORS as exc:
             logger.warning("step failed: %s", exc)
@@ -124,7 +129,18 @@ class GuideController(QObject):
     def _off_screen(self, capturer: ScreenCapturer) -> ScreenCapturer:
         return _OffScreenCapturer(capturer, self._leave_screen.emit, self._come_back.emit)
 
+    def _chosen_monitor(self) -> MonitorChoice:
+        """On the worker thread, during a capture: the choice read as the panel left the screen."""
+        return self._monitor_choice
+
     def _on_leave_screen(self, gone: threading.Event) -> None:
+        # Read here, on the UI thread, before `gone` lets the capture start.
+        self._monitor_choice = self._panel.monitor_choice()
+        logger.info(
+            "capture monitor=%s follows_panel=%s",
+            self._monitor_choice.connector,
+            self._monitor_choice.follows_panel,
+        )
         self._panel.setWindowOpacity(0.0)
         QTimer.singleShot(LEAVE_SCREEN_MS, gone.set)
 
@@ -160,13 +176,32 @@ def obey(panel: StepPanel, command: str) -> None:
         panel.appear()
 
 
-def run_panel(build_session: SessionFactory, listener: socket.socket) -> int:
+def list_monitors_into(panel: StepPanel, list_monitors: Callable[[], list[Monitor]]) -> None:
+    """Fill the panel's selector. Without a layout, the selector still offers its fixed entries."""
+    try:
+        monitors = list_monitors()
+    except MonitorError as exc:
+        logger.warning("monitors not listed: %s", exc)
+        monitors = []
+    panel.set_monitors(monitors)
+
+
+def run_panel(
+    build_session: SessionFactory,
+    listener: socket.socket,
+    list_monitors: Callable[[], list[Monitor]],
+    monitor: str | None = None,
+) -> int:
     """Show the panel and guide one task, until the panel is closed.
 
-    Meanwhile, every command a later launch sends through `listener` shows or hides the panel.
+    `monitor` is the starting choice of monitor; with none, captures follow the panel. Meanwhile,
+    every command a later launch sends through `listener` shows or hides the panel.
     """
     app = start_app()
-    panel = StepPanel()
+    panel = StepPanel(monitor=monitor)
+    list_monitors_into(panel, list_monitors)
+    app.screenAdded.connect(lambda _screen: list_monitors_into(panel, list_monitors))
+    app.screenRemoved.connect(lambda _screen: list_monitors_into(panel, list_monitors))
     # Kept in names: Qt holds no reference to them, and they have to outlive `exec`.
     controller = GuideController(panel, build_session)
     notifier = QSocketNotifier(listener.fileno(), QSocketNotifier.Type.Read)

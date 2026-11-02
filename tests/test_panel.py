@@ -16,9 +16,11 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from screenguide.capture import Screenshot  # noqa: E402
 from screenguide.cli import main  # noqa: E402
 from screenguide.detection import BBox  # noqa: E402
+from screenguide.monitors import WHOLE_DESKTOP, Monitor, MonitorChoice  # noqa: E402
 from screenguide.panel import (  # noqa: E402
     ACCENT,
     BACKGROUND,
+    Pick,
     StepPanel,
     demo_steps,
     render_crop,
@@ -197,3 +199,117 @@ def test_panel_command_reports_a_missing_x_display(image, monkeypatch, capsys):
 
     assert main(["panel", "--image", str(image), "--demo-step"]) == 1
     assert "DISPLAY" in capsys.readouterr().err
+
+
+# Faked layout: connectors and names as Mutter reports them, nothing else is read.
+MONITORS = [
+    Monitor("eDP-1", "Built-in display", 1920, 1200, 1.25, 2560, 1200, 1536, 960),
+    Monitor("DP-3", 'Dell Inc. 24"', 1920, 1080, 1.0, 303, 0, 1920, 1080),
+]
+
+
+@pytest.fixture
+def screen(monkeypatch):
+    """The panel's screen, as Qt would name it; tests move the panel by changing it."""
+    where = {"name": "DP-3"}
+    monkeypatch.setattr(StepPanel, "screen_name", lambda self: where["name"])
+    return where
+
+
+def entries(panel):
+    selector = panel.monitor_selector
+    return [selector.itemText(index) for index in range(selector.count())]
+
+
+def test_selector_is_hidden_until_there_are_monitors_to_list():
+    panel = StepPanel("Goal")
+    panel.show()
+
+    assert not panel.monitor_selector.isVisible()
+
+    panel.set_monitors(MONITORS)
+    assert panel.monitor_selector.isVisible() and panel.capture_source.isVisible()
+
+
+def test_selector_lists_follow_each_monitor_by_connector_and_name_and_the_desktop(screen):
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+
+    assert entries(panel) == [
+        "Follow panel",
+        'DP-3  Dell Inc. 24"',
+        "eDP-1  Built-in display",
+        "Whole desktop",
+    ]
+    assert panel.monitor_selector.currentText() == "Follow panel"
+
+
+def test_following_reads_the_panel_screen_each_time_it_is_asked(screen):
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+    panel.show()
+
+    assert panel.monitor_choice() == MonitorChoice("DP-3", follows_panel=True)
+    assert panel.capture_source.text() == 'Next capture: DP-3  Dell Inc. 24", where the panel is'
+
+    screen["name"] = "eDP-1"
+    panel.move(panel.x() + 10, panel.y())
+    QApplication.processEvents()
+
+    assert panel.monitor_choice() == MonitorChoice("eDP-1", follows_panel=True)
+    assert panel.capture_source.text() == (
+        "Next capture: eDP-1  Built-in display, where the panel is"
+    )
+
+
+def test_screen_that_matches_no_monitor_is_shown(screen):
+    screen["name"] = "XWAYLAND0"
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+
+    assert panel.capture_source.text() == "Next capture: screen XWAYLAND0, which matches no monitor"
+
+
+def test_pinning_stays_put_until_follow_is_picked_again(screen):
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+
+    panel.select_monitor("eDP-1")
+    screen["name"] = "DP-3"
+    assert panel.monitor_choice() == MonitorChoice("eDP-1")
+    assert panel.capture_source.text() == "Next capture: eDP-1  Built-in display"
+
+    panel.select_monitor(Pick.FOLLOW_PANEL)
+    assert panel.monitor_choice() == MonitorChoice("DP-3", follows_panel=True)
+
+
+def test_whole_desktop_is_an_explicit_choice(screen):
+    panel = StepPanel("Goal")
+    panel.set_monitors(MONITORS)
+
+    panel.select_monitor(Pick.WHOLE_DESKTOP)
+
+    assert panel.monitor_choice() == WHOLE_DESKTOP
+    assert panel.capture_source.text() == "Next capture: the whole desktop, every monitor"
+
+
+def test_starting_monitor_is_selected(screen):
+    panel = StepPanel("Goal", monitor="eDP-1")
+    panel.set_monitors(MONITORS)
+
+    assert panel.monitor_selector.currentText() == "eDP-1  Built-in display"
+    assert panel.monitor_choice() == MonitorChoice("eDP-1")
+
+
+def test_disconnected_pinned_monitor_stays_selected_and_says_so(screen):
+    panel = StepPanel("Goal", monitor="HDMI-9")
+    panel.set_monitors(MONITORS)
+
+    assert panel.monitor_selector.currentText() == "HDMI-9  (not connected)"
+    assert panel.monitor_choice() == MonitorChoice("HDMI-9")
+    assert panel.capture_source.text() == "Next capture: HDMI-9, not connected"
+
+    panel.set_monitors(MONITORS[:1])
+    panel.select_monitor("eDP-1")
+    panel.set_monitors(MONITORS[1:])
+    assert panel.monitor_selector.currentText() == "eDP-1  (not connected)"

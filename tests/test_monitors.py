@@ -9,10 +9,12 @@ from jeepney.io.blocking import Proxy, open_dbus_connection
 from PIL import Image
 
 from screenguide import capture
-from screenguide.capture import PortalCapturer
+from screenguide.capture import PortalCapturer, pinned
 from screenguide.cli import main
 from screenguide.config import load_config
 from screenguide.monitors import (
+    WHOLE_DESKTOP,
+    MonitorChoice,
     MonitorError,
     crop_box,
     crop_to_monitor,
@@ -257,7 +259,7 @@ class Requests:
 def test_chosen_monitor_is_cropped_and_measured(monkeypatch, tmp_path):
     Requests(monkeypatch, tmp_path)
 
-    screenshot = PortalCapturer(monitor="DP-4").capture()
+    screenshot = PortalCapturer(choose_monitor=pinned("DP-4")).capture()
 
     assert (screenshot.width, screenshot.height) == (3200, 1350)
     assert Image.open(io.BytesIO(screenshot.data)).size == (3200, 1350)
@@ -272,11 +274,39 @@ def test_no_choice_keeps_the_whole_desktop_and_never_reads_the_layout(monkeypatc
     assert requests.reads == 0
 
 
+def test_panel_screen_is_cropped_to_when_following(monkeypatch, tmp_path):
+    Requests(monkeypatch, tmp_path)
+
+    choice = MonitorChoice("DP-4", follows_panel=True)
+    screenshot = PortalCapturer(choose_monitor=lambda: choice).capture()
+
+    assert (screenshot.width, screenshot.height) == (3200, 1350)
+
+
+def test_choice_is_read_again_at_each_capture(monkeypatch, tmp_path):
+    requests = Requests(monkeypatch, tmp_path)
+    choices = [MonitorChoice("DP-4", follows_panel=True), WHOLE_DESKTOP]
+    capturer = PortalCapturer(choose_monitor=lambda: choices.pop(0))
+
+    assert capturer.capture().width == 3200
+    assert capturer.capture().data == requests.image
+
+
+def test_panel_screen_missing_from_the_layout_takes_no_screenshot(monkeypatch, tmp_path):
+    requests = Requests(monkeypatch, tmp_path)
+
+    choice = MonitorChoice("XWAYLAND0", follows_panel=True)
+    with pytest.raises(MonitorError, match="cannot tell which monitor the panel is on"):
+        PortalCapturer(choose_monitor=lambda: choice).capture()
+
+    assert requests.screenshots == 0
+
+
 def test_saving_stores_the_cropped_image(monkeypatch, tmp_path):
     Requests(monkeypatch, tmp_path)
     save_dir = tmp_path / "saved"
 
-    screenshot = PortalCapturer(save_dir=save_dir, monitor="DP-4").capture()
+    screenshot = PortalCapturer(save_dir=save_dir, choose_monitor=pinned("DP-4")).capture()
 
     assert [path.read_bytes() for path in save_dir.iterdir()] == [screenshot.data]
 
@@ -285,7 +315,7 @@ def test_unknown_monitor_takes_no_screenshot(monkeypatch, tmp_path):
     requests = Requests(monkeypatch, tmp_path)
 
     with pytest.raises(MonitorError, match="HDMI-9"):
-        PortalCapturer(monitor="HDMI-9").capture()
+        PortalCapturer(choose_monitor=pinned("HDMI-9")).capture()
 
     assert requests.screenshots == 0
 
@@ -294,7 +324,7 @@ def test_unavailable_layout_takes_no_screenshot(monkeypatch, tmp_path):
     requests = Requests(monkeypatch, tmp_path, layouts=[MonitorError("no layout")])
 
     with pytest.raises(MonitorError, match="no layout"):
-        PortalCapturer(monitor="DP-4").capture()
+        PortalCapturer(choose_monitor=pinned("DP-4")).capture()
 
     assert requests.screenshots == 0
 
@@ -313,7 +343,7 @@ def test_failure_after_the_screenshot_keeps_nothing(monkeypatch, tmp_path, layou
     save_dir = tmp_path / "saved"
 
     with pytest.raises(MonitorError, match=message):
-        PortalCapturer(save_dir=save_dir, monitor="DP-4").capture()
+        PortalCapturer(save_dir=save_dir, choose_monitor=pinned("DP-4")).capture()
 
     assert not save_dir.exists()
     assert not requests.path.exists()

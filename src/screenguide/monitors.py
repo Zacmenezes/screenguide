@@ -109,6 +109,34 @@ def _is_current(mode) -> bool:
     return mode[6].get("is-current", ("b", False))[1]
 
 
+@dataclass(frozen=True)
+class MonitorChoice:
+    """Which monitor a capture is cropped to, decided when the capture starts.
+
+    With no connector, the capture is the whole desktop. `follows_panel` says the connector is the
+    screen the panel was on, which only changes how a missing monitor is reported.
+    """
+
+    connector: str | None = None
+    follows_panel: bool = False
+
+
+WHOLE_DESKTOP = MonitorChoice()
+
+
+def pick_monitor(choice: MonitorChoice, monitors: list[Monitor]) -> Monitor:
+    """The monitor of the layout that `choice` names. It must name one."""
+    if not choice.follows_panel:
+        return find_monitor(choice.connector, monitors)
+    for monitor in monitors:
+        if monitor.connector == choice.connector:
+            return monitor
+    raise MonitorError(
+        f"cannot tell which monitor the panel is on: its screen {choice.connector!r} matches no "
+        "monitor in GNOME's layout; choose a monitor in the panel"
+    )
+
+
 def find_monitor(connector: str, monitors: list[Monitor]) -> Monitor:
     for monitor in monitors:
         if monitor.connector == connector:

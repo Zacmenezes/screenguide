@@ -11,6 +11,7 @@ from PIL import Image
 from screenguide.capture import Screenshot
 from screenguide.cli import main
 from screenguide.model import AnthropicProvider, ModelProviderError, ModelReply
+from screenguide.monitors import MonitorChoice
 
 
 def reply(label, done=False):
@@ -210,7 +211,7 @@ def test_monitor_option_reaches_the_capturer(image, monkeypatch):
     seen = []
 
     def portal(**kwargs):
-        seen.append(kwargs["monitor"])
+        seen.append(kwargs["choose_monitor"]())
         return CountingCapturer(image)
 
     monkeypatch.setattr("screenguide.cli.PortalCapturer", portal)
@@ -220,4 +221,4 @@ def test_monitor_option_reaches_the_capturer(image, monkeypatch):
     )
 
     assert main(["guide", "--goal", "Open settings", "--monitor", "DP-3"]) == 0
-    assert seen == ["DP-3"]
+    assert seen == [MonitorChoice("DP-3")]
