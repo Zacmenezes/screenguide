@@ -1,4 +1,5 @@
 import json
+import secrets
 import shutil
 import subprocess
 
@@ -88,6 +89,14 @@ def home(tmp_path, monkeypatch):
     path = tmp_path / "home"
     monkeypatch.setenv("HOME", str(path))
     return path
+
+
+@pytest.fixture(autouse=True)
+def instance_address(monkeypatch):
+    """A socket name of each test's own, so no test reaches a real running panel or another test."""
+    address = f"\0screenguide-test-{secrets.token_hex(8)}".encode()
+    monkeypatch.setattr("screenguide.instance.ADDRESS", address)
+    return address
 
 
 @pytest.fixture(autouse=True)

@@ -126,6 +126,21 @@ class StepPanel(QWidget):
         self._layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self._show_only()
 
+    def appear(self) -> None:
+        """Show the panel in front, ready for the goal if it is asking for one."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if not self._entry.isHidden():
+            self.goal_input.setFocus()
+
+    def toggle(self) -> None:
+        """Hide the panel, or bring it back as it was. Hiding ends nothing."""
+        if self.isVisible():
+            self.hide()
+        else:
+            self.appear()
+
     def set_goal(self, goal: str) -> None:
         self._goal.setText(goal)
 
