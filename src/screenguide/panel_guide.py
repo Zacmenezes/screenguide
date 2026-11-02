@@ -13,7 +13,7 @@ from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.instance import receive
 from screenguide.monitors import Monitor, MonitorChoice, MonitorError
 from screenguide.panel import StepPanel, start_app
-from screenguide.session import GuideSession, Step
+from screenguide.session import Answer, GuideSession, Step
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ CapturerWrapper = Callable[[ScreenCapturer], ScreenCapturer]
 Notify = Callable[[str], None]
 ChooseMonitor = Callable[[], MonitorChoice]
 SessionFactory = Callable[[str, CapturerWrapper, Notify, ChooseMonitor], GuideSession]
+# What a worker does with the session: the next step, or a message from the footer.
+Work = Callable[[GuideSession], Step | Answer]
 
 
 class State(Enum):
@@ -101,7 +103,7 @@ class GuideController(QObject):
     _leave_screen = Signal(object)
     _come_back = Signal()
     _notice = Signal(object, str)
-    _step_ready = Signal(object, object)
+    _reply_ready = Signal(object, object)
     _failed = Signal(object, str)
 
     def __init__(self, panel: StepPanel, build_session: SessionFactory) -> None:
@@ -112,14 +114,17 @@ class GuideController(QObject):
         self._task: _Task | None = None
         self._capture_turn = threading.Lock()
         self._monitor_choice = panel.monitor_choice()
+        # The state and view a text answer goes back to: the last step or error shown.
+        self._settled: tuple[State, Callable[[], None]] | None = None
 
         self._leave_screen.connect(self._on_leave_screen)
         self._come_back.connect(self._on_come_back)
         self._notice.connect(self._on_notice)
-        self._step_ready.connect(self._on_step_ready)
+        self._reply_ready.connect(self._on_reply)
         self._failed.connect(self._on_failed)
         panel.goal_submitted.connect(self._on_goal)
         panel.next_requested.connect(self._on_next)
+        panel.message_sent.connect(self._on_message)
         panel.task_ended.connect(self._end_task)
         panel.closed.connect(self._end_task)
 
@@ -135,6 +140,11 @@ class GuideController(QObject):
         if self.state in (State.STEP, State.ERROR):
             self._request_step()
 
+    def _on_message(self, message: str) -> None:
+        # Like Next step, but also once done: the user may still ask, or say the task is not.
+        if self.state in (State.STEP, State.DONE, State.ERROR):
+            self._start(lambda session: session.ask(message))
+
     def _end_task(self) -> None:
         """Throw the current task away and ask for a new goal."""
         if self._task is not None:
@@ -142,17 +152,22 @@ class GuideController(QObject):
             self._task.discarded.set()
             self._task = None
             self._panel.goal_input.clear()
+            self._panel.question_input.clear()
         self.state = State.IDLE
+        self._settled = None
         self._panel.set_goal("")
         self._panel.show_goal_entry()
 
     def _request_step(self) -> None:
+        self._start(lambda session: session.next_step())
+
+    def _start(self, work: Work) -> None:
         self.state = State.THINKING
         self._panel.show_thinking()
         # Daemon: quitting ends the process without waiting for a call in flight.
-        threading.Thread(target=self._produce_step, args=(self._task,), daemon=True).start()
+        threading.Thread(target=self._produce, args=(self._task, work), daemon=True).start()
 
-    def _produce_step(self, task: _Task) -> None:
+    def _produce(self, task: _Task, work: Work) -> None:
         try:
             if task.session is None:
                 task.session = self._build_session(
@@ -161,7 +176,7 @@ class GuideController(QObject):
                     lambda message: self._notice.emit(task, message),
                     self._chosen_monitor,
                 )
-            self._step_ready.emit(task, task.session.next_step())
+            self._reply_ready.emit(task, work(task.session))
         except TaskDiscarded:
             logger.info("step dropped: its task ended before the capture")
         except GUIDE_ERRORS as exc:
@@ -205,15 +220,28 @@ class GuideController(QObject):
         if self._current(task):
             self._panel.show_notice(message)
 
-    def _on_step_ready(self, task: _Task, step: Step) -> None:
-        if self._current(task):
-            self.state = State.DONE if step.done else State.STEP
-            self._panel.show_step(step, step.screenshot)
+    def _on_reply(self, task: _Task, reply: Step | Answer) -> None:
+        if not self._current(task):
+            return
+        if isinstance(reply, Answer):
+            # The step or error shown before the message stays, with the answer under it.
+            self.state, show_again = self._settled
+            show_again()
+            self._panel.show_answer(reply)
+            return
+        self._settle(
+            State.DONE if reply.done else State.STEP,
+            lambda: self._panel.show_step(reply, reply.screenshot),
+        )
 
     def _on_failed(self, task: _Task, message: str) -> None:
         if self._current(task):
-            self.state = State.ERROR
-            self._panel.show_error(message)
+            self._settle(State.ERROR, lambda: self._panel.show_error(message))
+
+    def _settle(self, state: State, show: Callable[[], None]) -> None:
+        self.state = state
+        self._settled = (state, show)
+        show()
 
 
 def obey(panel: StepPanel, command: str) -> None:

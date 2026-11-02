@@ -17,6 +17,15 @@ RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# A reply to a message from the footer: a text answer, or a step that replaces the current one.
+ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+MESSAGE_REPLY_SCHEMA = {"anyOf": [ANSWER_SCHEMA, RESPONSE_SCHEMA]}
+
 
 class InvalidModelResponse(ValueError):
     """The model's reply does not honour the response contract."""
@@ -35,14 +44,39 @@ class ModelResponse:
     confidence: float
 
 
+@dataclass(frozen=True)
+class AnswerResponse:
+    answer: str
+
+
 def parse_model_response(text: str) -> ModelResponse:
+    return _parse_step(_load(text))
+
+
+def parse_message_reply(text: str) -> AnswerResponse | ModelResponse:
+    """A reply to a message: `{"answer": ...}`, or a step in the response contract."""
+    raw = _load(text)
+    if "answer" not in raw:
+        return _parse_step(raw)
+    if set(raw) != {"answer"}:
+        raise InvalidModelResponse("an answer carries no other fields")
+    answer = raw["answer"]
+    if not isinstance(answer, str) or not answer.strip():
+        raise InvalidModelResponse("answer must be a non-empty string")
+    return AnswerResponse(answer)
+
+
+def _load(text: str) -> dict:
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
         raise InvalidModelResponse(f"reply is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise InvalidModelResponse("reply is not a JSON object")
+    return raw
 
+
+def _parse_step(raw: dict) -> ModelResponse:
     fields = ("element_id", "target_label", "instruction", "done", "confidence")
     missing = [name for name in fields if name not in raw]
     if missing:

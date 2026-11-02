@@ -10,7 +10,7 @@ from PIL import Image
 
 from screenguide.capture import Screenshot
 from screenguide.cli import main
-from screenguide.model import AnthropicProvider, ModelProviderError, ModelReply
+from screenguide.model import AnthropicProvider, ModelProviderError, ModelReply, steps_shown
 from screenguide.monitors import MonitorChoice
 
 
@@ -131,10 +131,9 @@ def test_history_is_the_earlier_instructions_as_text_with_only_the_current_scree
 
     first, second, third = provider.requests
     assert first.history == ()
-    assert second.history == ("First, in the middle of the menu.",)
-    assert third.history == (
-        "First, in the middle of the menu.",
-        "Second, in the middle of the menu.",
+    assert second.history == steps_shown(["First, in the middle of the menu."])
+    assert third.history == steps_shown(
+        ["First, in the middle of the menu.", "Second, in the middle of the menu."]
     )
     assert {request.goal for request in provider.requests} == {"Open settings"}
     assert len({request.marked.image.data for request in provider.requests}) == 3
@@ -165,8 +164,8 @@ def test_api_request_carries_one_image_per_step_however_long_the_history(monkeyp
         assert len(messages) == 1
         assert [block["type"] for block in messages[0]["content"]] == ["image", "text"]
     last_text = client.messages.create.call_args.kwargs["messages"][0]["content"][1]["text"]
-    assert "1. First, in the middle of the menu." in last_text
-    assert "2. Second, in the middle of the menu." in last_text
+    assert "1. Step you gave: First, in the middle of the menu." in last_text
+    assert "2. Step you gave: Second, in the middle of the menu." in last_text
 
 
 def test_every_usage_record_of_a_run_shares_one_session_id(monkeypatch, usage_log, capturer):

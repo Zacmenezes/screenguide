@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from screenguide.contract import InvalidModelResponse, parse_model_response
+from screenguide.contract import (
+    AnswerResponse,
+    InvalidModelResponse,
+    parse_message_reply,
+    parse_model_response,
+)
 
 VALID = {
     "element_id": 12,
@@ -58,3 +63,33 @@ def test_done_with_null_element_and_label_is_accepted():
 def test_invalid_response_is_rejected(text):
     with pytest.raises(InvalidModelResponse):
         parse_model_response(text)
+
+
+def test_message_reply_is_an_answer_or_a_step():
+    answer = parse_message_reply(json.dumps({"answer": "It opens the page layout options."}))
+    step = parse_message_reply(json.dumps(VALID))
+
+    assert answer == AnswerResponse("It opens the page layout options.")
+    assert step.element_id == 12 and step.instruction == VALID["instruction"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"answer": ""},
+        {"answer": "   "},
+        {"answer": None},
+        {"answer": "Yes.", "done": False},
+        {**VALID, "answer": "Yes."},
+        {**VALID, "confidence": 2},
+        [],
+    ],
+)
+def test_invalid_message_replies_are_rejected(reply):
+    with pytest.raises(InvalidModelResponse):
+        parse_message_reply(json.dumps(reply))
+
+
+def test_a_step_reply_cannot_be_an_answer():
+    with pytest.raises(InvalidModelResponse):
+        parse_model_response(json.dumps({"answer": "Yes."}))

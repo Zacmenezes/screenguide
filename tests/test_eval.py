@@ -7,7 +7,7 @@ import pytest
 from screenguide.cli import main
 from screenguide.detection import BBox
 from screenguide.evaluation import intersects, load_cases
-from screenguide.model import ModelProviderError, ModelReply
+from screenguide.model import ModelProviderError, ModelReply, steps_shown
 from screenguide.usage import read_usage_log
 
 SETTINGS_BBOX = {"x": 60, "y": 8, "width": 70, "height": 20}  # Box 2 of the fixed detector.
@@ -145,7 +145,7 @@ def test_each_case_is_scored_and_the_run_file_holds_settings_and_results(
     assert (miss["line"], miss["outcome"], miss["element_id"]) == (2, "miss", 1)
     assert miss["bbox"] == {"x": 10, "y": 8, "width": 40, "height": 20}
     assert (no_box["outcome"], no_box["element_id"], no_box["bbox"]) == ("no_box", None, None)
-    assert provider.histories[0] == ("Click File, top left.",)
+    assert provider.histories[0] == steps_shown(["Click File, top left."])
 
     out = capsys.readouterr().out
     assert "cases run: 3\nhits: 1\nhit rate: 33.3%" in out

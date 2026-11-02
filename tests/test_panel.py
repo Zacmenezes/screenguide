@@ -27,7 +27,7 @@ from screenguide.panel import (  # noqa: E402
     demo_steps,
     render_crop,
 )
-from screenguide.session import Step  # noqa: E402
+from screenguide.session import Answer, Step  # noqa: E402
 from screenguide.step_view import crop_view  # noqa: E402
 
 BOX = BBox(900, 500, 60, 20)
@@ -290,6 +290,9 @@ def test_panel_command_shows_the_demo_and_walks_through_its_steps(image, quiet_c
     assert panel.crop.isHidden()
     panel.next_button.click()
     assert not panel.next_button.isEnabled()
+    panel.question_input.setText("What now?")
+    panel.send_button.click()
+    assert "no model" in panel.answer.text()
 
 
 def test_panel_command_needs_the_demo_flag(image):
@@ -444,3 +447,82 @@ def test_disconnected_pinned_monitor_stays_selected_and_says_so(screen):
     panel.select_monitor("eDP-1")
     panel.set_monitors(MONITORS[1:])
     assert checked(panel) == ["eDP-1  (not connected)"]
+
+
+def test_footer_holds_next_the_question_field_and_send(screenshot):
+    panel = StepPanel("Goal")
+    panel.show()
+    panel.show_step(step(), screenshot)
+
+    assert panel.footer.isVisible()
+    assert panel.question_input.placeholderText() == "Update flow / Ask about this step"
+    for widget in (panel.next_button, panel.question_input, panel.send_button):
+        assert widget.parent() is panel.footer
+        assert widget.isVisible() and widget.isEnabled()
+
+
+def test_question_field_is_hidden_in_the_goal_entry_and_disabled_while_thinking(screenshot):
+    panel = StepPanel("Goal")
+    panel.show()
+    panel.show_goal_entry()
+    assert not panel.footer.isVisible()
+
+    panel.show_thinking()
+    assert panel.question_input.isVisible() and not panel.question_input.isEnabled()
+    assert not panel.send_button.isEnabled()
+
+    for show in (
+        lambda: panel.show_step(step(), screenshot),
+        lambda: panel.show_step(step(bbox=None, label=None, done=True), screenshot),
+        lambda: panel.show_error("boom"),
+    ):
+        panel.show_thinking()
+        show()
+        assert panel.question_input.isVisible() and panel.question_input.isEnabled()
+        assert panel.send_button.isEnabled()
+
+
+def test_enter_or_send_emits_the_message_and_clears_the_field(screenshot):
+    panel = StepPanel("Goal")
+    panel.show_step(step(), screenshot)
+    sent = []
+    panel.message_sent.connect(sent.append)
+
+    panel.question_input.setText("  I already did this ")
+    panel.question_input.returnPressed.emit()
+    panel.question_input.setText("What does it do?")
+    panel.send_button.click()
+
+    assert sent == ["I already did this", "What does it do?"]
+    assert panel.question_input.text() == ""
+
+
+def test_empty_message_or_one_sent_while_thinking_is_not_sent(screenshot):
+    panel = StepPanel("Goal")
+    panel.show_step(step(), screenshot)
+    sent = []
+    panel.message_sent.connect(sent.append)
+
+    panel.question_input.setText("   ")
+    panel.send_button.click()
+    panel.show_thinking()
+    panel.question_input.setText("Hello")
+    panel.question_input.returnPressed.emit()
+
+    assert sent == []
+
+
+def test_answer_shows_under_the_step_as_plain_text_until_the_next_step(screenshot):
+    panel = StepPanel("Goal")
+    panel.show()
+    panel.show_step(step(), screenshot)
+
+    panel.show_answer(Answer("<b>It</b> opens the layout options."))
+
+    assert panel.answer.isVisible()
+    assert panel.answer.textFormat() == Qt.TextFormat.PlainText
+    assert panel.instruction.isVisible() and panel.crop.isVisible()
+    assert panel.next_button.isVisible() and panel.next_button.isEnabled()
+
+    panel.show_step(step(), screenshot)
+    assert not panel.answer.isVisible()

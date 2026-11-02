@@ -10,14 +10,27 @@ import httpx2
 import pytest
 
 from screenguide.capture import Screenshot
-from screenguide.contract import RESPONSE_SCHEMA, parse_model_response
+from screenguide.contract import (
+    ANSWER_SCHEMA,
+    MESSAGE_REPLY_SCHEMA,
+    RESPONSE_SCHEMA,
+    parse_model_response,
+)
 from screenguide.detection import BBox, Element
 from screenguide.grounding import MarkedScreen
-from screenguide.model import SYSTEM_PROMPT, AnthropicProvider, ModelProviderError, ModelRequest
+from screenguide.model import (
+    SYSTEM_PROMPT,
+    AnthropicProvider,
+    HistoryEntry,
+    ModelProviderError,
+    ModelRequest,
+    Said,
+    steps_shown,
+)
 
 REQUEST = ModelRequest(
     goal="Open settings",
-    history=("Click File, top left.",),
+    history=steps_shown(["Click File, top left."]),
     marked=MarkedScreen(
         image=Screenshot(data=b"png-bytes", width=200, height=100),
         elements={7: Element(7, "Settings", BBox(x=1, y=2, width=3, height=4), 0.9)},
@@ -221,3 +234,57 @@ def test_real_sdk_with_a_key_passes_the_check(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
 
     AnthropicProvider("claude-haiku-5-5").check_credentials()
+
+
+MESSAGE_REQUEST = ModelRequest(
+    goal=REQUEST.goal,
+    history=(
+        HistoryEntry(Said.STEP, "Click File, top left."),
+        HistoryEntry(Said.MESSAGE, "Where is it?"),
+        HistoryEntry(Said.ANSWER, "Above the toolbar."),
+    ),
+    marked=REQUEST.marked,
+    message="I already did this",
+)
+
+
+def test_message_request_carries_the_message_and_allows_an_answer_or_a_step():
+    provider, create = make_provider()
+
+    provider.complete(MESSAGE_REQUEST)
+
+    kwargs = create.call_args.kwargs
+    schema = kwargs["output_config"]["format"]["schema"]
+    assert schema == MESSAGE_REPLY_SCHEMA
+    assert schema["anyOf"] == [ANSWER_SCHEMA, RESPONSE_SCHEMA]
+    image, text = kwargs["messages"][0]["content"]
+    assert image["type"] == "image"
+    assert "I already did this" in text["text"]
+    assert "language of the goal" in text["text"]
+
+
+def test_history_marks_who_said_each_entry():
+    provider, create = make_provider()
+
+    provider.complete(MESSAGE_REQUEST)
+
+    text = create.call_args.kwargs["messages"][0]["content"][1]["text"]
+    assert "1. Step you gave: Click File, top left." in text
+    assert "2. Message from the person: Where is it?" in text
+    assert "3. Your answer: Above the toolbar." in text
+
+
+def test_step_request_without_a_message_mentions_none():
+    provider, create = make_provider()
+
+    provider.complete(REQUEST)
+
+    text = create.call_args.kwargs["messages"][0]["content"][1]["text"]
+    assert "Message from the person" not in text
+
+
+def test_system_prompt_says_to_check_the_screen_against_the_message():
+    assert '{"answer": "..."}' in SYSTEM_PROMPT
+    assert "does not show its result" in SYSTEM_PROMPT
+    assert "instead of repeating the same instruction" in SYSTEM_PROMPT
+    assert "Write it in the language of the goal" in SYSTEM_PROMPT

@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from screenguide.capture import Screenshot
 from screenguide.detection import BBox, decode_image
 from screenguide.monitors import WHOLE_DESKTOP, Monitor, MonitorChoice
-from screenguide.session import Step
+from screenguide.session import Answer, Step
 from screenguide.step_view import CROP_WIDTH, CropView, crop_view, highlight_instruction
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,11 @@ STYLE = f"""
     QLabel#status {{ color: {ACCENT}; font-size: 15px; font-weight: 600; }}
     QLabel#error {{ color: #fca5a5; }}
     QLabel#notice, QLabel#source {{ color: #a1a1aa; font-size: 12px; }}
+    QLabel#answer {{
+        color: #e4e4e7; background: rgba(255, 255, 255, 14);
+        border-left: 2px solid {ACCENT}; padding: 8px 10px;
+    }}
+    QLineEdit:disabled {{ color: #71717a; }}
     QLineEdit {{
         color: #f4f4f5; background: rgba(255, 255, 255, 18);
         border: 1px solid #52525b; border-radius: 8px; padding: 7px 10px;
@@ -71,6 +76,7 @@ STYLE = f"""
     QPushButton:disabled {{ color: #71717a; }}
     QPushButton#close {{ color: #d4d4d8; font-weight: 400; border-radius: 12px; padding: 0; }}
     QPushButton#newTask {{ color: #d4d4d8; font-weight: 400; padding: 3px 10px; }}
+    QPushButton#send {{ color: #f4f4f5; padding: 7px 12px; }}
     QPushButton[bar="true"] {{
         color: #f4f4f5; border: none; border-radius: 14px; padding: 5px 12px;
     }}
@@ -132,6 +138,8 @@ class StepPanel(QWidget):
 
     goal_submitted = Signal(str)
     next_requested = Signal()
+    # From the footer: a question about the current step, or news of what happened.
+    message_sent = Signal(str)
     # New Task or ×: the user is done with the current task.
     task_ended = Signal()
     usage_requested = Signal()
@@ -221,8 +229,21 @@ class StepPanel(QWidget):
         self.instruction.setTextFormat(Qt.TextFormat.RichText)
         self.crop = QLabel()
         self.crop.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.answer = QLabel(objectName="answer", wordWrap=True)
+        self.answer.setTextFormat(Qt.TextFormat.PlainText)
         self.next_button = QPushButton("Next step")
         self.next_button.clicked.connect(self.next_requested)
+        self.question_input = QLineEdit(placeholderText="Update flow / Ask about this step")
+        self.question_input.returnPressed.connect(self._send_message)
+        self.send_button = QPushButton("↑", objectName="send")
+        self.send_button.setToolTip("Send")
+        self.send_button.clicked.connect(self._send_message)
+        self.footer = QWidget()
+        footer = QHBoxLayout(self.footer)
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addWidget(self.next_button)
+        footer.addWidget(self.question_input, stretch=1)
+        footer.addWidget(self.send_button)
 
         self.body = _Rounded(radius=14)
         self._body_layout = QVBoxLayout(self.body)
@@ -235,8 +256,9 @@ class StepPanel(QWidget):
         self._body_layout.addWidget(self.error)
         self._body_layout.addWidget(self.instruction)
         self._body_layout.addWidget(self.crop)
+        self._body_layout.addWidget(self.answer)
         self._body_layout.addWidget(self.notice)
-        self._body_layout.addWidget(self.next_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self._body_layout.addWidget(self.footer)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -290,7 +312,8 @@ class StepPanel(QWidget):
 
     def show_thinking(self) -> None:
         self.status.setText("Thinking…")
-        self._show_only(self.status)
+        self._show_only(self.status, self.footer)
+        self._set_messages_enabled(False)
         self._fit()
 
     def show_notice(self, message: str) -> None:
@@ -302,7 +325,8 @@ class StepPanel(QWidget):
         self.error.setText(message)
         self.next_button.setText("Retry")
         self.next_button.setEnabled(True)
-        self._show_only(self.error, self.next_button)
+        self._show_only(self.error, self.footer, self.next_button)
+        self._set_messages_enabled(True)
         self._fit()
 
     def show_step(self, step: Step, screenshot: Screenshot) -> None:
@@ -312,15 +336,23 @@ class StepPanel(QWidget):
         self.next_button.setEnabled(not step.done)
         self._show_only(
             self.instruction,
+            self.footer,
             *([self.status] if step.done else [self.next_button]),
             *([self.crop] if step.bbox is not None else []),
         )
+        self._set_messages_enabled(True)
         if step.bbox is None:
             self.crop.clear()
         else:
             image = decode_image(screenshot)
             view = crop_view(step.bbox, image.size)
             self.crop.setPixmap(render_crop(image, view, self.devicePixelRatioF()))
+        self._fit()
+
+    def show_answer(self, answer: Answer) -> None:
+        """Add a text answer under what is shown. The next step or error takes it away."""
+        self.answer.setText(answer.text)
+        self.answer.show()
         self._fit()
 
     def show_usage(self, summary: str) -> None:
@@ -420,10 +452,16 @@ class StepPanel(QWidget):
             self.error,
             self.instruction,
             self.crop,
+            self.answer,
             self.notice,
+            self.footer,
             self.next_button,
         ):
             widget.setVisible(widget in shown)
+
+    def _set_messages_enabled(self, enabled: bool) -> None:
+        self.question_input.setEnabled(enabled)
+        self.send_button.setEnabled(enabled)
 
     def _fit(self) -> None:
         # Left to the next event loop pass, the layout's old minimum height would block the shrink.
@@ -445,6 +483,12 @@ class StepPanel(QWidget):
         goal = self.goal_input.text().strip()
         if goal:
             self.goal_submitted.emit(goal)
+
+    def _send_message(self) -> None:
+        message = self.question_input.text().strip()
+        if message and self.question_input.isEnabled():
+            self.question_input.clear()
+            self.message_sent.emit(message)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -564,6 +608,9 @@ def run_demo(screenshot: Screenshot, usage_summary: Callable[[], str]) -> int:
     app = start_app()
     panel = StepPanel(DEMO_GOAL)
     panel.next_requested.connect(lambda: panel.show_step(next(steps), screenshot))
+    panel.message_sent.connect(
+        lambda _message: panel.show_answer(Answer("The demo has no model to answer messages."))
+    )
     panel.usage_requested.connect(lambda: panel.show_usage(usage_summary()))
     panel.quit_requested.connect(app.quit)
     panel.show_step(next(steps), screenshot)
