@@ -26,7 +26,7 @@ from screenguide.panel import Pick, StepPanel  # noqa: E402
 from screenguide.panel_guide import GuideController, State  # noqa: E402
 from screenguide.pricing import PricingTable  # noqa: E402
 from screenguide.session import GuideSession  # noqa: E402
-from screenguide.usage import JsonlUsageTracker  # noqa: E402
+from screenguide.usage import JsonlUsageTracker, UsageRecord  # noqa: E402
 from test_monitors import MIXED, Requests  # noqa: E402
 
 
@@ -415,12 +415,223 @@ def test_closing_during_a_step_does_not_bring_the_panel_back(guide):
     wait_until(lambda: g.provider.requests)
     g.panel.close()
     g.provider.release.set()
-    # The worker's late result has to arrive and be dropped.
-    deadline = time.monotonic() + 0.1
-    wait_until(lambda: time.monotonic() > deadline)
+    let_late_results_arrive()
 
     assert not g.panel.isVisible()
-    assert g.controller.state is State.THINKING
+    assert g.controller.state is State.IDLE
+
+
+def let_late_results_arrive():
+    """A worker's late result has to arrive, and be dropped, before the test looks."""
+    for thread in threading.enumerate():
+        if thread is not threading.main_thread():
+            thread.join(5)
+    deadline = time.monotonic() + 0.05
+    wait_until(lambda: time.monotonic() > deadline)
+
+
+def test_hide_and_guide_me_keep_the_task_and_a_step_that_came_meanwhile(guide):
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.provider.release.clear()
+    g.start()
+    wait_until(lambda: g.provider.requests)
+
+    g.panel.hide_button.click()
+    assert g.panel.folded and g.panel.isVisible()
+    g.provider.release.set()
+    g.wait_for(State.STEP)
+    assert not g.panel.instruction.isVisible()
+
+    g.panel.guide_me_button.click()
+    assert ">File</span>" in g.panel.instruction.text() and g.panel.instruction.isVisible()
+    assert g.panel._goal.text() == "Open settings"
+
+    g.panel.hide_button.click()
+    g.panel.guide_me_button.click()
+    g.panel.next_button.click()
+    g.wait_for(State.STEP)
+    assert g.provider.requests[-1].history == ("Click File, in the top menu.",)
+    assert len(g.goals) == 1
+
+
+def test_captures_while_folded_leave_the_bar_out_too(guide):
+    g = guide(reply())
+    g.panel.fold()
+
+    g.start()
+    g.wait_for(State.STEP)
+
+    assert g.capturer.opacity_at_capture == [0.0]
+    assert g.panel.windowOpacity() == 1.0
+
+
+@pytest.mark.parametrize("end", ["new_task", "close"])
+def test_ending_the_task_drops_its_late_step_and_starts_afresh(guide, end):
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.provider.release.clear()
+    g.start()
+    wait_until(lambda: g.provider.requests)
+
+    (g.panel.new_task_button if end == "new_task" else g.panel._close).click()
+
+    assert g.controller.state is State.IDLE
+    assert g.panel._goal.text() == "" and g.panel.goal_input.text() == ""
+    assert g.panel.folded == (end == "close")
+    g.provider.release.set()
+    let_late_results_arrive()
+    assert g.controller.state is State.IDLE
+    assert g.panel.instruction.text() == ""
+    assert g.panel.notice.isHidden()
+
+    g.panel.guide_me_button.click()
+    assert g.panel.focusWidget() is g.panel.goal_input
+    g.start("Change the theme")
+    g.wait_for(State.STEP)
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert g.goals == ["Open settings", "Change the theme"]
+    assert g.provider.requests[-1].goal == "Change the theme"
+    assert g.provider.requests[-1].history == ()
+
+
+class ByGoal(Provider):
+    """Answers each goal with its own label, whichever worker gets to it first."""
+
+    def __init__(self, labels):
+        super().__init__()
+        self._labels = labels
+
+    def complete(self, request):
+        self.requests.append(request)
+        self.release.wait(5)
+        return ModelReply(text=reply(self._labels[request.goal]), input_tokens=10, output_tokens=5)
+
+
+def test_a_late_step_from_the_old_task_does_not_replace_the_new_one(usage_log):
+    g = Guide(ByGoal({"Open settings": "File", "Change the theme": "Help"}), usage_log)
+    g.provider.release.clear()
+    g.start()
+    wait_until(lambda: len(g.provider.requests) == 1)
+
+    g.panel.new_task_button.click()
+    g.start("Change the theme")
+    wait_until(lambda: len(g.provider.requests) == 2)
+    g.provider.release.set()
+    let_late_results_arrive()
+
+    assert g.controller.state is State.STEP
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert g.panel.windowOpacity() == 1.0
+
+
+class OneAtATime(Capturer):
+    """A portal that, like GNOME's, would leave a second request unanswered; this one counts it."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.inside = 0
+        self.overlaps = 0
+        self.entered = threading.Event()
+        self.hold = threading.Event()
+        self.hold.set()
+
+    def capture(self):
+        self.inside += 1
+        self.overlaps += self.inside > 1
+        self.entered.set()
+        self.hold.wait(5)
+        try:
+            return super().capture()
+        finally:
+            self.inside -= 1
+
+
+def test_captures_of_an_ended_task_and_the_next_one_take_turns(usage_log):
+    g = Guide(ByGoal({"Open settings": "File", "Change the theme": "Help"}), usage_log)
+    portal = OneAtATime(g.panel)
+    g.capturer = portal
+    g.start()
+    g.wait_for(State.STEP)
+    portal.entered.clear()
+    portal.hold.clear()
+
+    g.panel.next_button.click()
+    wait_until(portal.entered.is_set)
+    g.panel.new_task_button.click()
+    g.start("Change the theme")
+    deadline = time.monotonic() + 0.1
+    wait_until(lambda: time.monotonic() > deadline)
+    portal.hold.set()
+    g.wait_for(State.STEP)
+    let_late_results_arrive()
+
+    assert portal.overlaps == 0
+    assert portal.opacity_at_capture == [0.0, 0.0, 0.0]
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert g.panel.windowOpacity() == 1.0
+
+
+def test_a_late_error_from_the_old_task_is_not_shown(guide):
+    g = guide(ModelProviderError("Anthropic API error 500: boom"))
+    g.provider.release.clear()
+    g.start()
+    wait_until(lambda: g.provider.requests)
+
+    g.panel.new_task_button.click()
+    g.provider.release.set()
+    let_late_results_arrive()
+
+    assert g.controller.state is State.IDLE
+    assert not g.panel.error.isVisible() and g.panel.goal_input.isVisible()
+
+
+def test_a_task_ended_before_its_capture_captures_nothing(usage_log):
+    started = threading.Event()
+    go_on = threading.Event()
+    sessions = []
+
+    def factory(goal, wrap, notify, choose_monitor):
+        started.set()
+        go_on.wait(5)
+        g.capturer = Capturer(g.panel)
+        session = GuideSession(
+            goal=goal,
+            capturer=wrap(g.capturer),
+            detector=FixedDetector(ELEMENTS),
+            grounding=SetOfMarkGrounding(),
+            provider=Provider(reply()),
+            tracker=JsonlUsageTracker(usage_log, PricingTable({})),
+            notify=notify,
+        )
+        sessions.append(session)
+        return session
+
+    g = Guide(None, usage_log, factory)
+    g.start()
+    assert started.wait(5)
+    g.panel.new_task_button.click()
+    go_on.set()
+    let_late_results_arrive()
+
+    assert g.capturer.opacity_at_capture == []
+    assert g.panel.windowOpacity() == 1.0
+    assert g.controller.state is State.IDLE
+
+
+def test_monitor_picked_in_the_menu_reaches_the_next_capture(
+    monkeypatch, tmp_path, usage_log, screen
+):
+    g = PortalGuide(monkeypatch, tmp_path, usage_log, [reply(), reply()])
+    g.start()
+    g.wait_for(State.STEP)
+
+    entry = next(a for a in g.panel.monitor_menu.actions() if a.text().startswith("DP-3"))
+    entry.trigger()
+    assert g.panel.capture_source.text().startswith("Next capture: DP-3")
+    g.panel.next_button.click()
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    assert g.sizes == [(3200, 1350), (2400, 1350)]
 
 
 def test_panel_command_guides_with_the_real_wiring(image, monkeypatch):
@@ -559,7 +770,9 @@ def test_starting_choice_comes_from_option_or_config(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
     seen = []
-    real_loop(lambda panel: seen.append(panel.monitor_selector.currentText()))
+    real_loop(
+        lambda panel: seen.extend(text for text, checked in panel.monitor_entries() if checked)
+    )
 
     assert main(["panel", *argv]) == 0
     assert seen == [expected]
@@ -715,3 +928,59 @@ def test_instance_is_released_when_the_panel_ends(real_loop):
     listener = claim_or_send("show")
     assert listener is not None
     listener.close()
+
+
+def test_toggle_hides_the_whole_window_bar_included_folded_or_not(guide):
+    g = guide()
+    g.panel.fold()
+
+    panel_guide.obey(g.panel, "toggle")
+    assert not g.panel.isVisible() and not g.panel.bar.isVisible()
+
+    panel_guide.obey(g.panel, "toggle")
+    assert g.panel.isVisible() and g.panel.bar.isVisible() and g.panel.folded
+
+
+def test_usage_entry_shows_the_usage_log_summary(real_loop, usage_log):
+    JsonlUsageTracker(usage_log, PricingTable({})).record(
+        UsageRecord(
+            timestamp="2026-11-02T10:00:00+00:00",
+            session_id="abcdef0123",
+            provider="anthropic",
+            model="claude-test",
+            input_tokens=1200,
+            output_tokens=80,
+            image_width=800,
+            image_height=600,
+            latency_ms=900.0,
+        )
+    )
+    seen = []
+
+    def body(panel):
+        panel.usage_action.trigger()
+        seen.append(panel._usage_window.text.toPlainText())
+
+    real_loop(body)
+
+    assert main(["panel"]) == 0
+    assert "claude-test" in seen[0] and "1200" in seen[0].replace(",", "")
+
+
+def test_quit_ends_the_app(monkeypatch):
+    """`screenguide panel` with its real event loop, left only through ⋮ → Quit."""
+    monkeypatch.setattr("signal.signal", lambda *args: None)
+    panels = []
+    original_init = StepPanel.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        panels.append(self)
+        QTimer.singleShot(0, self.quit_action.trigger)
+
+    monkeypatch.setattr(StepPanel, "__init__", init)
+    # Fails the test rather than hanging it if Quit does nothing.
+    QTimer.singleShot(5000, lambda: QApplication.exit(1))
+
+    assert main(["panel"]) == 0
+    assert len(panels) == 1
