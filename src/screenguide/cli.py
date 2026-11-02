@@ -133,6 +133,17 @@ def detect(image: Path, output: Path) -> int:
     return 0
 
 
+def panel(image: Path) -> int:
+    try:
+        # Imported here so that the other commands start without loading Qt.
+        from screenguide.panel import run_demo
+
+        return run_demo(FileCapturer(image).capture())
+    except (ImportError, OSError, DetectionError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
 def usage() -> int:
     try:
         records, malformed = read_usage_log(load_config().usage_log)
@@ -169,6 +180,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     detect_parser.add_argument(
         "--output", type=Path, required=True, help="where to write the marked PNG"
     )
+    panel_parser = commands.add_parser("panel", help="show a ready-made step in the panel")
+    panel_parser.add_argument("--image", type=Path, required=True, help="image file to crop")
+    panel_parser.add_argument(
+        "--demo-step", action="store_true", required=True, help="show made-up steps"
+    )
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")
 
@@ -177,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return guide(args.goal, args.monitor)
     if args.command == "detect":
         return detect(args.image, args.output)
+    if args.command == "panel":
+        return panel(args.image)
     if args.command == "usage":
         return usage()
     if args.command == "monitors":
