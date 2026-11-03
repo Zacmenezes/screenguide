@@ -5,7 +5,7 @@ import pytest
 from PIL import Image, ImageFont
 
 from screenguide.capture import Screenshot
-from screenguide.detection import BBox, DetectionError, Element
+from screenguide.detection import BBox, DetectionError, Element, Word
 from screenguide.grounding import (
     DARK,
     FONT_SIZE,
@@ -44,6 +44,48 @@ def test_chosen_number_maps_back_to_its_bbox():
     marked = grounding.mark(screenshot(), [ELEMENT])
 
     assert grounding.resolve(marked, 7) == ELEMENT.bbox
+
+
+MENU = Element(
+    3,
+    "File Edit View Edit",
+    BBox(10, 5, 200, 20),
+    0.9,
+    words=(
+        Word("File", BBox(10, 5, 30, 20)),
+        Word("Edit", BBox(60, 5, 30, 20)),
+        Word("View", BBox(110, 5, 40, 20)),
+        Word("Edit", BBox(170, 5, 40, 20)),
+    ),
+)
+LABEL = Element(
+    4,
+    "Page Style...",
+    BBox(10, 50, 100, 20),
+    0.9,
+    words=(Word("Page", BBox(10, 50, 40, 20)), Word("Style...", BBox(55, 50, 55, 20))),
+)
+
+
+@pytest.mark.parametrize(
+    ("element", "target_label", "expected"),
+    [
+        pytest.param(MENU, "View", BBox(110, 5, 40, 20), id="one word of a wider box"),
+        pytest.param(MENU, "view", BBox(110, 5, 40, 20), id="in another case"),
+        pytest.param(MENU, "Edit View", BBox(60, 5, 90, 20), id="a run of words"),
+        pytest.param(MENU, "Edit", MENU.bbox, id="a name that appears twice"),
+        pytest.param(MENU, "Help", MENU.bbox, id="a name the box does not hold"),
+        pytest.param(MENU, "Fi", MENU.bbox, id="part of a word"),
+        pytest.param(MENU, None, MENU.bbox, id="no name"),
+        pytest.param(LABEL, "Page Style", LABEL.bbox, id="every word, without punctuation"),
+        pytest.param(ELEMENT, "File", ELEMENT.bbox, id="a box of its own"),
+    ],
+)
+def test_chosen_number_maps_to_the_named_words_inside_its_box(element, target_label, expected):
+    grounding = SetOfMarkGrounding()
+    marked = grounding.mark(screenshot(), [element])
+
+    assert grounding.resolve(marked, element.id, target_label) == expected
 
 
 def test_unknown_number_is_an_explicit_error():

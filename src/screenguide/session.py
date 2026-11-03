@@ -182,6 +182,8 @@ class GuideSession:
         if isinstance(response, AnswerResponse) or response.element_id is None:
             return response, None
         try:
-            return response, self._grounding.resolve(request.marked, response.element_id)
+            return response, self._grounding.resolve(
+                request.marked, response.element_id, response.target_label
+            )
         except UnknownElementError as exc:
             raise InvalidModelResponse(str(exc)) from exc

@@ -4,7 +4,7 @@ import io
 import logging
 import math
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from PIL import Image, UnidentifiedImageError
@@ -39,11 +39,21 @@ class BBox:
 
 
 @dataclass(frozen=True)
+class Word:
+    """One word of an element and its own box, for pointing inside a box that holds several."""
+
+    text: str
+    bbox: BBox
+
+
+@dataclass(frozen=True)
 class Element:
     id: int
     text: str
     bbox: BBox
     confidence: float
+    # In reading order. Empty when the detector does not know them.
+    words: tuple[Word, ...] = field(default=(), compare=False)
 
 
 class ElementDetector(Protocol):
@@ -61,19 +71,20 @@ class RapidOcrDetector:
         engine = self._load_engine()
         started = time.perf_counter()
         try:
-            result = engine(image)
+            result = engine(image, return_word_box=True)
         except Exception as exc:  # The engine loads its models here and has no error type.
             raise DetectionError(f"OCR failed ({exc}): {REINSTALL_HINT}") from exc
 
+        boxes = result.boxes if result.boxes is not None else ()
+        texts = result.txts or ()
+        # With no text the engine still reports one empty word result, so these need not align.
+        words = result.word_results if texts and result.word_results else ((),) * len(texts)
         fragments = []
-        for quad, text, score in zip(
-            result.boxes if result.boxes is not None else (),
-            result.txts or (),
-            result.scores or (),
-            strict=True,
+        for quad, text, score, word_results in zip(
+            boxes, texts, result.scores or (), words, strict=True
         ):
             if text.strip() and score >= MIN_CONFIDENCE:
-                fragments.append(_fragment(quad, text.strip(), float(score), image))
+                fragments.append(_fragment(quad, text.strip(), float(score), word_results, image))
 
         elements = _number(_merge(fragments))
         logger.info(
@@ -106,13 +117,39 @@ def decode_image(screenshot: Screenshot) -> Image.Image:
         raise DetectionError("cannot read the image: not a valid image file") from exc
 
 
-def _fragment(quad: Any, text: str, score: float, image: Image.Image) -> Element:
-    """Build an unnumbered element from a four-point box, kept inside the image."""
+def _fragment(quad: Any, text: str, score: float, word_results: Any, image: Image.Image) -> Element:
+    """Build an unnumbered element from a four-point box and its words, kept inside the image."""
+    bbox = _bbox(quad, image)
+    words = tuple(
+        Word(word_text.strip(), _inside(_bbox(word_quad, image), bbox))
+        for word_text, _, word_quad in word_results
+        if word_text.strip()
+    )
+    # The words stand for the fragment only when they spell its text.
+    if match_key(" ".join(word.text for word in words)) != match_key(text):
+        words = (Word(text, bbox),)
+    return Element(0, text, bbox, score, words)
+
+
+def _bbox(quad: Any, image: Image.Image) -> BBox:
     left = max(math.floor(min(point[0] for point in quad)), 0)
     top = max(math.floor(min(point[1] for point in quad)), 0)
     right = min(math.ceil(max(point[0] for point in quad)), image.width)
     bottom = min(math.ceil(max(point[1] for point in quad)), image.height)
-    return Element(0, text, BBox(left, top, right - left, bottom - top), score)
+    return BBox(left, top, right - left, bottom - top)
+
+
+def _inside(box: BBox, outer: BBox) -> BBox:
+    """`box` cut to `outer`: the engine's word boxes can stick out of their line by a pixel."""
+    left, top = max(box.x, outer.x), max(box.y, outer.y)
+    right = min(box.x + box.width, outer.x + outer.width)
+    bottom = min(box.y + box.height, outer.y + outer.height)
+    return BBox(left, top, max(right - left, 0), max(bottom - top, 0))
+
+
+def match_key(text: str) -> str:
+    """Text reduced to what matching by name compares: no case, spaces or punctuation."""
+    return "".join(character for character in text.casefold() if character.isalnum())
 
 
 def _merge(fragments: list[Element]) -> list[Element]:
@@ -147,6 +184,7 @@ def _join(left: Element, right: Element) -> Element:
         f"{left.text} {right.text}",
         BBox(x, y, far_x - x, far_y - y),
         min(left.confidence, right.confidence),
+        left.words + right.words,
     )
 
 

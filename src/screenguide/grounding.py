@@ -9,7 +9,7 @@ from typing import Protocol
 from PIL import Image, ImageDraw, ImageFont
 
 from screenguide.capture import Screenshot
-from screenguide.detection import BBox, Element, decode_image
+from screenguide.detection import BBox, Element, decode_image, match_key
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,14 @@ class GroundingStrategy(Protocol):
 
     def mark(self, screenshot: Screenshot, elements: list[Element]) -> MarkedScreen: ...
 
-    def resolve(self, marked: MarkedScreen, element_id: int) -> BBox:
-        """Return the bbox for a chosen number; raise `UnknownElementError` if there is none."""
+    def resolve(
+        self, marked: MarkedScreen, element_id: int, target_label: str | None = None
+    ) -> BBox:
+        """Return the bbox for a chosen number; raise `UnknownElementError` if there is none.
+
+        When the box holds several words and `target_label` names some of them, the bbox is
+        theirs, so that the arrow points at the target and not at the middle of its line.
+        """
         ...
 
 
@@ -78,11 +84,37 @@ class SetOfMarkGrounding:
             elements={element.id: element for element in elements},
         )
 
-    def resolve(self, marked: MarkedScreen, element_id: int) -> BBox:
+    def resolve(
+        self, marked: MarkedScreen, element_id: int, target_label: str | None = None
+    ) -> BBox:
         try:
-            return marked.elements[element_id].bbox
+            element = marked.elements[element_id]
         except KeyError:
             raise UnknownElementError(f"no box is numbered {element_id}") from None
+        return _named_words(element, target_label) or element.bbox
+
+
+def _named_words(element: Element, target_label: str | None) -> BBox | None:
+    """The box of the one run of words that `target_label` names, if it is not all of them."""
+    wanted = match_key(target_label or "")
+    words = element.words
+    if not wanted or len(words) < 2:
+        return None
+    runs = [
+        (start, end)
+        for start in range(len(words))
+        for end in range(start + 1, len(words) + 1)
+        if "".join(match_key(word.text) for word in words[start:end]) == wanted
+    ]
+    if len(runs) != 1 or runs[0] == (0, len(words)):
+        return None
+    start, end = runs[0]
+    boxes = [word.bbox for word in words[start:end]]
+    left = min(box.x for box in boxes)
+    top = min(box.y for box in boxes)
+    right = max(box.x + box.width for box in boxes)
+    bottom = max(box.y + box.height for box in boxes)
+    return BBox(left, top, right - left, bottom - top)
 
 
 def _downscale(image: Image.Image, max_long_edge: int | None) -> Image.Image:
