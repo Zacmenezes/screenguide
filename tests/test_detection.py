@@ -7,7 +7,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from screenguide.capture import Screenshot
 from screenguide.cli import main
-from screenguide.detection import BBox, DetectionError, Element, RapidOcrDetector
+from screenguide.detection import BBox, DetectionError, Element, RapidOcrDetector, Word
+from screenguide.grounding import SetOfMarkGrounding
+from screenguide.step_view import crop_view
 
 LABELS = {"File": (40, 30), "Save as": (200, 30), "Preferences": (420, 30), "Help": (40, 150)}
 
@@ -36,14 +38,19 @@ def quad(x, y, width, height):
 
 
 class FakeEngine:
+    """Returns the given fragments; a fourth item, if any, is the fragment's word results."""
+
     def __init__(self, *fragments):
         self.fragments = fragments
 
-    def __call__(self, image):
+    def __call__(self, image, return_word_box=False):
         if not self.fragments:
-            return SimpleNamespace(boxes=None, txts=None, scores=None)
-        boxes, texts, scores = zip(*self.fragments, strict=True)
-        return SimpleNamespace(boxes=boxes, txts=texts, scores=scores)
+            return SimpleNamespace(boxes=None, txts=None, scores=None, word_results=None)
+        boxes, texts, scores = zip(*(fragment[:3] for fragment in self.fragments), strict=True)
+        words = tuple(fragment[3] if len(fragment) > 3 else () for fragment in self.fragments)
+        return SimpleNamespace(
+            boxes=boxes, txts=texts, scores=scores, word_results=words if return_word_box else None
+        )
 
 
 def blank_screenshot():
@@ -69,6 +76,65 @@ def test_merges_words_of_one_label_keeping_the_lowest_confidence():
     )
 
     assert elements == [Element(1, "Save as", BBox(100, 10, 66, 20), 0.8)]
+
+
+def test_merged_element_keeps_the_box_of_each_fragment():
+    (element,) = detect(
+        (quad(100, 10, 40, 20), "Save", 0.9),
+        (quad(146, 10, 20, 20), "as", 0.8),
+    )
+
+    assert element.words == (Word("Save", BBox(100, 10, 40, 20)), Word("as", BBox(146, 10, 20, 20)))
+
+
+def test_a_line_of_several_words_keeps_the_box_of_each_word():
+    words = (("File", 0.9, quad(10, 5, 30, 20)), ("Edit", 0.9, quad(60, 5, 30, 21)))
+
+    (element,) = detect((quad(10, 5, 78, 20), "File Edit", 0.9, words))
+
+    assert element.bbox == BBox(10, 5, 78, 20)
+    # "Edit" sticks out of its line by a few pixels and is cut to it.
+    assert element.words == (Word("File", BBox(10, 5, 30, 20)), Word("Edit", BBox(60, 5, 28, 20)))
+
+
+def test_words_that_do_not_spell_the_line_give_the_line_as_one_word():
+    words = (("Fi", 0.9, quad(10, 5, 30, 20)),)
+
+    (element,) = detect((quad(10, 5, 78, 20), "File Edit", 0.9, words))
+
+    assert element.words == (Word("File Edit", BBox(10, 5, 78, 20)),)
+
+
+def test_arrow_on_a_tab_merged_with_its_neighbours_lands_on_the_named_tab():
+    """Regression for #49, with the fragments RapidOCR found on a real tab bar.
+
+    The four tabs are a word gap apart, so they merge into one element; the arrow used to land
+    on its centre, between "Domains" and "Access".
+    """
+    fragments = {
+        "Issues": (474, 80, 539, 105),
+        "Domains": (549, 78, 653, 105),
+        "Access": (640, 76, 721, 106),
+        "Settings": (729, 75, 813, 109),
+    }
+    screen = blank_screenshot()
+    engine = FakeEngine(
+        *(
+            (quad(left, top, right - left, bottom - top), text, 1.0)
+            for text, (left, top, right, bottom) in fragments.items()
+        )
+    )
+    (element,) = RapidOcrDetector(engine=engine).detect(screen)
+    grounding = SetOfMarkGrounding()
+    marked = grounding.mark(screen, [element])
+
+    view = crop_view(grounding.resolve(marked, element.id, "Settings"), (800, 600))
+
+    left, top, right, bottom = fragments["Settings"]
+    tip_x = view.region.x + view.tip.x * view.region.width / view.width
+    tip_y = view.region.y + view.tip.y * view.region.height / view.height
+    assert element.text == "Issues Domains Access Settings"
+    assert left <= tip_x <= right and top <= tip_y <= bottom
 
 
 @pytest.mark.parametrize(
@@ -113,6 +179,13 @@ def test_no_text_gives_no_elements():
     assert detect() == []
 
 
+def test_no_text_with_the_empty_word_result_the_engine_reports_gives_no_elements():
+    def engine(image, **_):
+        return SimpleNamespace(boxes=None, txts=None, scores=None, word_results=(("", 1.0, None),))
+
+    assert RapidOcrDetector(engine=engine).detect(blank_screenshot()) == []
+
+
 @pytest.mark.parametrize("module", ["rapidocr", "onnxruntime"])
 def test_missing_engine_gives_install_instructions(monkeypatch, module):
     monkeypatch.setitem(sys.modules, module, None)
@@ -133,7 +206,7 @@ def test_model_that_fails_to_load_gives_install_instructions(monkeypatch):
 
 
 def test_model_that_fails_on_first_use_gives_install_instructions():
-    def fail(image):
+    def fail(image, **_):
         raise RuntimeError("Failed to download PP-OCRv6_det_small.onnx")
 
     with pytest.raises(DetectionError, match=r"\.onnx.*--force-reinstall"):
