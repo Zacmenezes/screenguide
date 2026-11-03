@@ -139,6 +139,8 @@ class GuideController(QObject):
     def _on_next(self) -> None:
         if self.state in (State.STEP, State.ERROR):
             self._request_step()
+        else:
+            logger.info("next step ignored state=%s", self.state.value)
 
     def _on_message(self, message: str) -> None:
         # Like Next step, but also once done: the user may still ask, or say the task is not.
@@ -249,6 +251,10 @@ def obey(panel: StepPanel, command: str) -> None:
     logger.info("instance command received command=%s", command)
     if command == "toggle":
         panel.toggle()
+    elif command == "next":
+        # As the Next step button, but without touching the window: activating it would take the
+        # focus from the app and close the menu the user just opened, before the capture.
+        panel.next_requested.emit()
     else:
         panel.appear()
 
@@ -273,7 +279,8 @@ def run_panel(
     """Show the bar and the panel and guide one task after another, until Quit.
 
     `monitor` is the starting choice of monitor; with none, captures follow the panel. Meanwhile,
-    every command a later launch sends through `listener` shows or hides the window.
+    every command a later launch sends through `listener` shows or hides the window, or asks for
+    the next step.
     """
     app = start_app()
     panel = StepPanel(monitor=monitor)

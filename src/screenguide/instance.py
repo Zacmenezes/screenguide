@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # The leading NUL puts the name in the abstract namespace, outside the file system.
 ADDRESS = f"\0screenguide-{os.getuid()}".encode()
-COMMANDS = ("show", "toggle")
+COMMANDS = ("show", "toggle", "next")
 MAX_COMMAND_BYTES = 64
 TIMEOUT_SECONDS = 2.0
 # The instance can end between a failed bind and the connect; then the bind is tried again.

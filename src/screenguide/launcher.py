@@ -1,7 +1,7 @@
 """Entry point of the `screenguide` command.
 
-A shortcut's `toggle` reaches the running panel before anything else is imported: loading the rest
-of the app, the Anthropic SDK above all, takes most of a second.
+A shortcut's `toggle` or `next` reaches the running panel before anything else is imported: loading
+the rest of the app, the Anthropic SDK above all, takes most of a second.
 """
 
 import sys
@@ -12,7 +12,7 @@ from screenguide.instance import forward
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else list(argv)
-    if args == ["toggle"] and forward("toggle"):
+    if args in (["toggle"], ["next"]) and forward(args[0]):
         return 0
     from screenguide.cli import main as cli_main
 

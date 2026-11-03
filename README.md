@@ -136,6 +136,10 @@ Shortcuts, then add one with
   `command -v screenguide` prints the path.
 - **Shortcut:** for example Ctrl+Alt+G.
 
+Add a second one whose command ends in `next` instead, for example on Ctrl+Alt+N. `screenguide
+next` presses **Next step** for you while the focus stays in the app you are guiding, so a menu
+you just opened stays open for the capture.
+
 [docs/global-shortcut.md](docs/global-shortcut.md) does the same from a terminal and explains why
 this is not the `GlobalShortcuts` portal.
 
@@ -147,7 +151,8 @@ this is not the `GlobalShortcuts` portal.
    steps out of the way while it captures the screen, and then shows the first step.
 3. Read the instruction. The target's name is in colour, and the crop shows where it is. When
    the target has no text of its own, such as an icon, the panel shows only the instruction.
-4. Do the step yourself, then press **Next step**. Repeat until the panel shows "Done".
+4. Do the step yourself, then press **Next step**, or the `next` shortcut without leaving the
+   app. Repeat until the panel shows "Done".
 
 To ask about a step, or to tell the guide what happened, type in **Update flow / Ask about this
 step** at the bottom of the panel and press Enter. Like **Next step**, this captures the screen
@@ -243,9 +248,8 @@ the run spent. Real screenshots in `eval/images/` and the runs in `eval/runs/` s
 - **The screen flashes on every capture,** with GNOME's screenshot animation
   ([#35](https://github.com/Zacmenezes/screenguide/issues/35)).
 - **Steps inside an open menu:** clicking **Next step** takes focus from the app, which can close
-  the menu you just opened before the capture sees it
-  ([#37](https://github.com/Zacmenezes/screenguide/issues/37)). Tell the guide in the footer
-  field and it gives the step to reopen the menu.
+  the menu you just opened before the capture sees it. Press the `next` shortcut instead (see
+  [Keyboard shortcut](#keyboard-shortcut)): the focus stays in the app and the menu stays open.
 - Anthropic is the only provider. There is no per-session budget yet
   ([#21](https://github.com/Zacmenezes/screenguide/issues/21)), and the panel shows no token or
   cost line; use `screenguide usage`.

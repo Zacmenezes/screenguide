@@ -226,14 +226,17 @@ def test_socket_of_another_user_gets_no_command(running, monkeypatch):
     assert receive(running) == []
 
 
-def test_toggle_reaches_the_running_panel_without_loading_the_app(running, instance_address):
+@pytest.mark.parametrize("command", ["toggle", "next"])
+def test_shortcut_command_reaches_the_running_panel_without_loading_the_app(
+    running, instance_address, command
+):
     """The shortcut's launch skips the imports that take most of a second."""
     script = (
         "import sys\n"
         "from screenguide import instance\n"
         f"instance.ADDRESS = {instance_address!r}\n"
         "from screenguide.launcher import main\n"
-        "code = main(['toggle'])\n"
+        f"code = main([{command!r}])\n"
         "print(code, 'screenguide.cli' in sys.modules, 'anthropic' in sys.modules)\n"
     )
     done = subprocess.run(
@@ -241,7 +244,7 @@ def test_toggle_reaches_the_running_panel_without_loading_the_app(running, insta
     )
 
     assert done.stdout.split() == ["0", "False", "False"], done.stderr
-    assert receive_soon(running) == ["toggle"]
+    assert receive_soon(running) == [command]
 
 
 def test_forward_reports_when_no_instance_answers():
@@ -250,8 +253,8 @@ def test_forward_reports_when_no_instance_answers():
 
 @pytest.mark.parametrize(
     ("args", "with_instance"),
-    [(["toggle"], False), (["panel"], True), (["toggle", "--help"], True)],
-    ids=["toggle-with-none-running", "panel", "other-arguments"],
+    [(["toggle"], False), (["next"], False), (["panel"], True), (["toggle", "--help"], True)],
+    ids=["toggle-with-none-running", "next-with-none-running", "panel", "other-arguments"],
 )
 def test_launcher_hands_everything_else_to_the_cli(monkeypatch, args, with_instance):
     from screenguide import cli, launcher
