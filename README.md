@@ -136,6 +136,10 @@ Shortcuts, then add one with
   `command -v screenguide` prints the path.
 - **Shortcut:** for example Ctrl+Alt+G.
 
+Add a second one whose command ends in `next` instead, for example on Ctrl+Alt+N. `screenguide
+next` presses **Next step** for you while the focus stays in the app you are guiding, so a menu
+you just opened stays open for the capture.
+
 [docs/global-shortcut.md](docs/global-shortcut.md) does the same from a terminal and explains why
 this is not the `GlobalShortcuts` portal.
 
@@ -147,7 +151,8 @@ this is not the `GlobalShortcuts` portal.
    steps out of the way while it captures the screen, and then shows the first step.
 3. Read the instruction. The target's name is in colour, and the crop shows where it is. When
    the target has no text of its own, such as an icon, the panel shows only the instruction.
-4. Do the step yourself, then press **Next step**. Repeat until the panel shows "Done".
+4. Do the step yourself, then press **Next step**, or the `next` shortcut without leaving the
+   app. Repeat until the panel shows "Done".
 
 To ask about a step, or to tell the guide what happened, type in **Update flow / Ask about this
 step** at the bottom of the panel and press Enter. Like **Next step**, this captures the screen

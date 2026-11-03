@@ -15,7 +15,7 @@ from screenguide.detection import DetectionError, ElementDetector, RapidOcrDetec
 from screenguide.errors import GUIDE_ERRORS, describe_guide_error
 from screenguide.evaluation import Case, CaseResult, git_commit, load_cases, open_run_file, run_eval
 from screenguide.grounding import GroundingStrategy, SetOfMarkGrounding
-from screenguide.instance import InstanceError, claim_or_send
+from screenguide.instance import InstanceError, claim_or_send, forward
 from screenguide.model import AnthropicProvider, ModelProvider, ModelProviderError
 from screenguide.monitors import MonitorChoice, MonitorError, format_monitors, read_monitors
 from screenguide.pricing import PricingTable, load_pricing
@@ -280,6 +280,17 @@ def toggle() -> int:
     return panel(command="toggle")
 
 
+def next_step() -> int:
+    """Have the running panel ask for the next step, as its Next step button does."""
+    if forward("next"):
+        return 0
+    print(
+        "error: no screenguide panel is running; start one with `screenguide panel`",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def panel_demo(image: Path) -> int:
     try:
         from screenguide.panel import run_demo
@@ -352,6 +363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--demo-step", action="store_true", help="show made-up steps instead of guiding a task"
     )
     commands.add_parser("toggle", help="show or hide the running panel, starting one if none runs")
+    commands.add_parser(
+        "next", help="ask the running panel for the next step, leaving the focus where it is"
+    )
     commands.add_parser("usage", help="summarise usage by day, session, provider and model")
     commands.add_parser("monitors", help="list the monitors by connector name")
     eval_parser = commands.add_parser(
@@ -380,6 +394,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return panel_demo(args.image) if args.demo_step else panel(args.monitor)
     if args.command == "toggle":
         return toggle()
+    if args.command == "next":
+        return next_step()
     if args.command == "usage":
         return usage()
     if args.command == "monitors":

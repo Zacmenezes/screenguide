@@ -1032,6 +1032,110 @@ def test_show_command_never_hides(guide):
     assert g.panel.isVisible()
 
 
+
+def watch_window(panel, monkeypatch):
+    """The calls that would bring the window forward and take the focus from the user's app."""
+    calls = []
+    for name in ("activateWindow", "raise_", "show", "setFocus"):
+        monkeypatch.setattr(panel, name, lambda *args, name=name: calls.append(name))
+    return calls
+
+
+def test_next_shortcut_asks_for_exactly_one_step_without_touching_the_window(
+    guide, monkeypatch
+):
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+    window_calls = watch_window(g.panel, monkeypatch)
+
+    panel_guide.obey(g.panel, "next")
+    assert g.controller.state is State.THINKING
+    g.wait_for(State.STEP)
+
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert len(g.capturer.opacity_at_capture) == 2
+    assert g.capturer.opacity_at_capture[-1] == 0.0
+    assert len(g.provider.requests) == 2
+    assert g.provider.requests[-1].history == steps_shown(["Click File, in the top menu."])
+    assert window_calls == []
+    assert g.panel.windowOpacity() == 1.0
+
+
+def test_next_shortcut_is_ignored_while_a_step_is_in_progress(guide):
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+    g.provider.release.clear()
+
+    panel_guide.obey(g.panel, "next")
+    wait_until(lambda: len(g.provider.requests) == 2)
+    panel_guide.obey(g.panel, "next")
+    panel_guide.obey(g.panel, "next")
+    g.provider.release.set()
+    g.wait_for(State.STEP)
+    let_late_results_arrive()
+
+    assert len(g.provider.requests) == 2
+    assert len(g.capturer.opacity_at_capture) == 2
+    assert g.controller.state is State.STEP
+
+
+def test_next_shortcut_retries_after_an_error_like_the_button(guide):
+    g = guide(ModelProviderError("Anthropic API error 500: boom"), reply())
+    g.start()
+    g.wait_for(State.ERROR)
+
+    panel_guide.obey(g.panel, "next")
+    g.wait_for(State.STEP)
+
+    assert len(g.provider.requests) == 2
+
+
+@pytest.mark.parametrize("done", [False, True], ids=["no-goal-yet", "done"])
+def test_next_shortcut_does_nothing_without_a_step_to_follow(guide, done):
+    g = guide(reply(done=True))
+    if done:
+        g.start()
+        g.wait_for(State.DONE)
+
+    panel_guide.obey(g.panel, "next")
+    let_late_results_arrive()
+
+    assert g.controller.state is (State.DONE if done else State.IDLE)
+    assert len(g.provider.requests) == (1 if done else 0)
+
+
+def test_next_shortcut_queued_several_times_asks_for_one_step(guide):
+    """Presses that reach the instance together, as the kernel queues them, make one step."""
+    from screenguide.instance import claim_or_send, receive
+
+    g = guide(reply("File", 1), reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+    g.provider.release.clear()
+    listener = claim_or_send("show")
+    try:
+        for _ in range(3):
+            assert main(["next"]) == 0
+        commands = []
+        wait_until(lambda: commands.extend(receive(listener)) or len(commands) == 3)
+        for command in commands:
+            panel_guide.obey(g.panel, command)
+    finally:
+        listener.close()
+    g.provider.release.set()
+    g.wait_for(State.STEP)
+    let_late_results_arrive()
+
+    assert len(g.provider.requests) == 2
+
+
+def test_next_without_a_running_panel_says_so_and_starts_none(capsys):
+    assert main(["next"]) == 1
+
+    assert "no screenguide panel is running" in capsys.readouterr().err
+
 @pytest.fixture
 def real_loop(monkeypatch):
     """`screenguide panel` or `toggle` as launched, with `exec` running `body` instead."""
