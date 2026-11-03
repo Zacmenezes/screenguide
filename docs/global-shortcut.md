@@ -72,4 +72,5 @@ On Ubuntu 26.04 with GNOME 50 (xdg-desktop-portal 1.21.1, xdg-desktop-portal-gno
   window, but only while the process that holds the portal session runs. The portal cannot start
   the panel.
 
-The custom shortcut has neither limit, so it is the path for now.
+The custom shortcut has neither limit, so it is the path for now, for `next` too. Whether a key
+bound through the portal also keeps a menu open was not tested.
