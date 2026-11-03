@@ -149,6 +149,13 @@ this is not the `GlobalShortcuts` portal.
    the target has no text of its own, such as an icon, the panel shows only the instruction.
 4. Do the step yourself, then press **Next step**. Repeat until the panel shows "Done".
 
+To ask about a step, or to tell the guide what happened, type in **Update flow / Ask about this
+step** at the bottom of the panel and press Enter. Like **Next step**, this captures the screen
+again. The reply is either an answer, shown under the current step, or a corrected step that
+replaces it. If you say you did something the screen does not show, such as opening a menu that
+has since closed, the guide says so and helps you get back there. Every message costs a model
+call, which `screenguide usage` lists.
+
 Instructions follow the language of the goal you type. The bar stays on screen with the panel:
 
 - **Hide** folds the panel away under the bar. The guide carries on, and a step that arrives
@@ -237,7 +244,8 @@ the run spent. Real screenshots in `eval/images/` and the runs in `eval/runs/` s
   ([#35](https://github.com/Zacmenezes/screenguide/issues/35)).
 - **Steps inside an open menu:** clicking **Next step** takes focus from the app, which can close
   the menu you just opened before the capture sees it
-  ([#37](https://github.com/Zacmenezes/screenguide/issues/37)).
+  ([#37](https://github.com/Zacmenezes/screenguide/issues/37)). Tell the guide in the footer
+  field and it gives the step to reopen the menu.
 - Anthropic is the only provider. There is no per-session budget yet
   ([#21](https://github.com/Zacmenezes/screenguide/issues/21)), and the panel shows no token or
   cost line; use `screenguide usage`.

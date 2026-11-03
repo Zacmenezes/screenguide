@@ -8,9 +8,9 @@ from screenguide.cli import main
 from screenguide.contract import InvalidModelResponse, ModelRefusal
 from screenguide.detection import BBox
 from screenguide.grounding import SetOfMarkGrounding
-from screenguide.model import ModelProviderError, ModelReply, ModelRequest
+from screenguide.model import HistoryEntry, ModelProviderError, ModelReply, ModelRequest, Said
 from screenguide.pricing import PricingTable
-from screenguide.session import GuideSession
+from screenguide.session import Answer, GuideSession, Step
 from screenguide.usage import JsonlUsageTracker
 
 
@@ -305,3 +305,120 @@ def test_cli_passes_model_and_effort_from_config(image, monkeypatch):
 
     assert main(["run", "--image", str(image), "--goal", "Open settings"]) == 0
     assert seen == [("claude-sonnet-5-5", "low")]
+
+
+ANSWER = ModelReply(text=json.dumps({"answer": "It opens the settings page."}), input_tokens=8)
+CORRECTED = ModelReply(
+    text=json.dumps(
+        {
+            "element_id": 1,
+            "target_label": "File",
+            "instruction": "The File menu is closed: click File again, at the top left.",
+            "done": False,
+            "confidence": 0.7,
+        }
+    )
+)
+
+
+class RecordingProvider(ScriptedProvider):
+    def __init__(self, *replies):
+        super().__init__(*replies)
+        self.requests: list[ModelRequest] = []
+
+    def complete(self, request):
+        self.requests.append(request)
+        return super().complete(request)
+
+
+def counting_captures(session):
+    captures = []
+    capture = session._capturer.capture
+    session._capturer.capture = lambda: captures.append(1) or capture()
+    return captures
+
+
+def test_message_goes_out_with_goal_history_and_a_fresh_capture(image, usage_log):
+    provider = RecordingProvider(GOOD, ANSWER)
+    session = make_session(image, usage_log, provider)
+    captures = counting_captures(session)
+    session.next_step()
+
+    session.ask("What does this button do?")
+
+    assert len(captures) == 2
+    first, second = provider.requests
+    assert first.message is None
+    assert second.message == "What does this button do?"
+    assert second.goal == "Open settings"
+    assert second.history == (
+        HistoryEntry(Said.STEP, "Click Settings, in the middle of the menu."),
+    )
+    assert second.marked.elements == first.marked.elements
+
+
+def test_text_answer_and_message_join_the_history_for_later_steps(image, usage_log):
+    provider = RecordingProvider(GOOD, ANSWER, GOOD)
+    session = make_session(image, usage_log, provider)
+    session.next_step()
+
+    reply = session.ask("What does this button do?")
+    session.next_step()
+
+    assert reply == Answer("It opens the settings page.")
+    expected = (
+        HistoryEntry(Said.STEP, "Click Settings, in the middle of the menu."),
+        HistoryEntry(Said.MESSAGE, "What does this button do?"),
+        HistoryEntry(Said.ANSWER, "It opens the settings page."),
+    )
+    assert tuple(session.history[:3]) == expected
+    assert provider.requests[2].history == expected
+    assert provider.requests[2].message is None
+
+
+def test_corrected_step_is_a_step_and_joins_the_history_after_the_message(image, usage_log):
+    session = make_session(image, usage_log, ScriptedProvider(GOOD, CORRECTED))
+    session.next_step()
+
+    step = session.ask("I already did this")
+
+    assert isinstance(step, Step)
+    assert step.target_label == "File"
+    assert step.bbox == BBox(x=10, y=8, width=40, height=20)
+    assert step.screenshot is not None
+    assert session.history[1:] == [
+        HistoryEntry(Said.MESSAGE, "I already did this"),
+        HistoryEntry(Said.STEP, "The File menu is closed: click File again, at the top left."),
+    ]
+
+
+@pytest.mark.parametrize("bad", [ModelReply(text="not json"), ModelReply(text='{"answer": ""}')])
+def test_invalid_reply_to_a_message_gets_one_retry_and_both_are_recorded(image, usage_log, bad):
+    session = make_session(image, usage_log, ScriptedProvider(bad, ANSWER))
+    captures = counting_captures(session)
+
+    assert session.ask("Is this right?") == Answer("It opens the settings page.")
+
+    assert len(captures) == 1
+    assert [record["attempt"] for record in read_records(usage_log)] == [1, 2]
+
+
+def test_failed_message_leaves_the_history_as_it_was(image, usage_log):
+    session = make_session(image, usage_log, ScriptedProvider(GOOD, *[ModelReply(text="no")] * 2))
+    session.next_step()
+
+    with pytest.raises(InvalidModelResponse):
+        session.ask("Is this right?")
+
+    assert [entry.said for entry in session.history] == [Said.STEP]
+    assert [record["attempt"] for record in read_records(usage_log)] == [1, 1, 2]
+
+
+def test_refused_message_is_not_retried(image, usage_log):
+    refusal = ModelReply(text="", stop_reason="refusal", refusal_detail="cyber: declined")
+    provider = ScriptedProvider(refusal, ANSWER)
+
+    with pytest.raises(ModelRefusal):
+        make_session(image, usage_log, provider).ask("Is this right?")
+
+    assert provider.calls == 1

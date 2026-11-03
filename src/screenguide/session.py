@@ -9,17 +9,30 @@ from datetime import UTC, datetime
 
 from screenguide.capture import ScreenCapturer, Screenshot
 from screenguide.contract import (
+    AnswerResponse,
     InvalidModelResponse,
     ModelRefusal,
     ModelResponse,
+    parse_message_reply,
     parse_model_response,
 )
 from screenguide.detection import BBox, ElementDetector
 from screenguide.grounding import GroundingStrategy, UnknownElementError
-from screenguide.model import STOP_MAX_TOKENS, STOP_REFUSAL, ModelProvider, ModelRequest
+from screenguide.model import (
+    STOP_MAX_TOKENS,
+    STOP_REFUSAL,
+    HistoryEntry,
+    ModelProvider,
+    ModelRequest,
+    Said,
+    steps_shown,
+)
 from screenguide.usage import UsageRecord, UsageTracker
 
 logger = logging.getLogger(__name__)
+
+Reply = ModelResponse | AnswerResponse
+Parser = Callable[[str], Reply]
 
 
 @dataclass(frozen=True)
@@ -32,6 +45,13 @@ class Step:
     element_id: int | None = None  # The box number the model chose.
     # The capture `bbox` refers to, so that the panel can crop it.
     screenshot: Screenshot | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class Answer:
+    """A text reply to a message: the current step still stands."""
+
+    text: str
 
 
 class GuideSession:
@@ -49,7 +69,7 @@ class GuideSession:
     ) -> None:
         """`history` preloads the steps already shown; `session_id` groups the usage records."""
         self.goal = goal
-        self.history: list[str] = list(history)
+        self.history: list[HistoryEntry] = list(steps_shown(history))
         self.session_id = session_id or uuid.uuid4().hex
         self._capturer = capturer
         self._detector = detector
@@ -72,18 +92,40 @@ class GuideSession:
         An invalid or truncated reply gets one retry. Raises `InvalidModelResponse` if the retry
         fails too, and `ModelRefusal` as soon as the model declines.
         """
+        screenshot, request = self._request()
+        response, bbox = self._ask_twice(request, parse_model_response)
+        return self._shown(response, bbox, screenshot)
+
+    def ask(self, message: str) -> Step | Answer:
+        """Send a message about the current step along with a fresh capture.
+
+        The reply is a text answer, or a step that replaces the current one. Retries and errors
+        are as for `next_step`. The message and the reply join the history only once both exist.
+        """
+        screenshot, request = self._request(message)
+        response, bbox = self._ask_twice(request, parse_message_reply)
+        self.history.append(HistoryEntry(Said.MESSAGE, message))
+        if isinstance(response, AnswerResponse):
+            self.history.append(HistoryEntry(Said.ANSWER, response.answer))
+            logger.info("answer session_id=%s", self.session_id)
+            return Answer(response.answer)
+        return self._shown(response, bbox, screenshot)
+
+    def _request(self, message: str | None = None) -> tuple[Screenshot, ModelRequest]:
         screenshot = self._capturer.capture()
         elements = self._detector.detect(screenshot)
         marked = self._grounding.mark(screenshot, elements)
-        request = ModelRequest(self.goal, tuple(self.history), marked)
+        return screenshot, ModelRequest(self.goal, tuple(self.history), marked, message)
 
+    def _ask_twice(self, request: ModelRequest, parse: Parser) -> tuple[Reply, BBox | None]:
         try:
-            response, bbox = self._ask(request, attempt=1)
+            return self._ask(request, parse, attempt=1)
         except InvalidModelResponse as exc:
             logger.warning("invalid reply session_id=%s attempt=1: %s", self.session_id, exc)
-            response, bbox = self._ask(request, attempt=2)
+            return self._ask(request, parse, attempt=2)
 
-        self.history.append(response.instruction)
+    def _shown(self, response: ModelResponse, bbox: BBox | None, screenshot: Screenshot) -> Step:
+        self.history.append(HistoryEntry(Said.STEP, response.instruction))
         logger.info(
             "step session_id=%s element_id=%s done=%s",
             self.session_id,
@@ -100,7 +142,7 @@ class GuideSession:
             screenshot=screenshot,
         )
 
-    def _ask(self, request: ModelRequest, attempt: int) -> tuple[ModelResponse, BBox | None]:
+    def _ask(self, request: ModelRequest, parse: Parser, attempt: int) -> tuple[Reply, BBox | None]:
         image = request.marked.image
         if self._provider.external:
             self._notify(
@@ -136,8 +178,8 @@ class GuideSession:
         if reply.stop_reason == STOP_MAX_TOKENS:
             raise InvalidModelResponse("reply was cut off at the token limit")
 
-        response = parse_model_response(reply.text)
-        if response.element_id is None:
+        response = parse(reply.text)
+        if isinstance(response, AnswerResponse) or response.element_id is None:
             return response, None
         try:
             return response, self._grounding.resolve(request.marked, response.element_id)

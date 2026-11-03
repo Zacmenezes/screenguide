@@ -20,7 +20,13 @@ from screenguide import panel_guide  # noqa: E402
 from screenguide.capture import CaptureError, PortalCapturer, Screenshot  # noqa: E402
 from screenguide.cli import main  # noqa: E402
 from screenguide.grounding import SetOfMarkGrounding  # noqa: E402
-from screenguide.model import STOP_REFUSAL, ModelProviderError, ModelReply  # noqa: E402
+from screenguide.model import (  # noqa: E402
+    STOP_REFUSAL,
+    ModelProviderError,
+    ModelReply,
+    Said,
+    steps_shown,
+)
 from screenguide.monitors import MonitorChoice  # noqa: E402
 from screenguide.panel import Pick, StepPanel  # noqa: E402
 from screenguide.panel_guide import GuideController, State  # noqa: E402
@@ -224,11 +230,178 @@ def test_whole_guide_reaches_done_with_one_capture_per_step(guide):
     assert not g.panel.next_button.isVisible() and not g.panel.next_button.isEnabled()
     assert not g.panel.crop.isVisible()
     assert len(g.capturer.opacity_at_capture) == 3
-    assert g.provider.requests[2].history == (
-        "Click File, in the top menu.",
-        "Click Help, in the top menu.",
+    assert g.provider.requests[2].history == steps_shown(
+        ["Click File, in the top menu.", "Click Help, in the top menu."]
     )
     assert len(g.goals) == 1
+
+
+def answer(text="It opens the settings page."):
+    return json.dumps({"answer": text})
+
+
+def send(g, message):
+    g.panel.question_input.setText(message)
+    g.panel.question_input.returnPressed.emit()
+
+
+def test_message_recaptures_with_the_panel_away_and_carries_goal_history_and_message(guide):
+    g = guide(reply(), answer())
+    g.start()
+    g.wait_for(State.STEP)
+
+    send(g, "What does this button do?")
+    assert g.controller.state is State.THINKING
+    g.wait_for(State.STEP)
+
+    assert g.capturer.opacity_at_capture == [0.0, 0.0]
+    assert g.panel.windowOpacity() == 1.0
+    request = g.provider.requests[-1]
+    assert request.goal == "Open settings"
+    assert request.message == "What does this button do?"
+    assert request.history == steps_shown(["Click Settings, in the top menu."])
+    assert request.marked.image.width == 800
+    assert len(g.goals) == 1
+
+
+def test_field_is_disabled_while_thinking_on_a_message(guide):
+    g = guide(reply(), answer())
+    g.start()
+    g.wait_for(State.STEP)
+    g.provider.release.clear()
+
+    send(g, "Is this right?")
+    wait_until(lambda: len(g.provider.requests) == 2)
+    assert g.panel.status.text().startswith("Thinking")
+    assert g.panel.question_input.isVisible() and not g.panel.question_input.isEnabled()
+    assert not g.panel.send_button.isEnabled()
+    send(g, "Second message")
+    g.panel.message_sent.emit("Sent around the field")
+    g.provider.release.set()
+    g.wait_for(State.STEP)
+
+    assert len(g.provider.requests) == 2
+    assert g.panel.question_input.isEnabled()
+
+
+def test_text_answer_keeps_the_step_and_next_step_takes_it_away(guide):
+    g = guide(reply(), answer(), reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+    instruction = g.panel.instruction.text()
+
+    send(g, "What does this button do?")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    assert g.panel.instruction.isVisible() and g.panel.instruction.text() == instruction
+    assert g.panel.crop.isVisible() and not g.panel.crop.pixmap().isNull()
+    assert g.panel.answer.isVisible()
+    assert g.panel.answer.text() == "It opens the settings page."
+    assert g.panel.next_button.isVisible() and g.panel.next_button.isEnabled()
+
+    g.panel.next_button.click()
+    g.wait_for(State.STEP)
+
+    assert ">Help</span>" in g.panel.instruction.text()
+    assert not g.panel.answer.isVisible()
+    assert [entry.said for entry in g.provider.requests[-1].history] == [
+        Said.STEP,
+        Said.MESSAGE,
+        Said.ANSWER,
+    ]
+
+
+def test_corrected_step_replaces_the_current_one(guide):
+    g = guide(reply(), answer(), reply("File", 1))
+    g.start()
+    g.wait_for(State.STEP)
+    send(g, "What is this?")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    send(g, "I already did this")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    assert ">File</span>" in g.panel.instruction.text()
+    assert not g.panel.answer.isVisible()
+    assert g.panel.next_button.isEnabled()
+
+
+def test_corrected_step_can_be_done_and_messages_still_go_out_once_done(guide):
+    g = guide(reply(), reply("All set", done=True), answer("You are finished."))
+    g.start()
+    g.wait_for(State.STEP)
+
+    send(g, "I saved it already")
+    g.wait_for(State.DONE)
+    assert g.panel.status.text() == "Done"
+    assert not g.panel.next_button.isVisible()
+
+    send(g, "Anything else?")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.DONE)
+
+    assert g.panel.status.isVisible() and g.panel.status.text() == "Done"
+    assert g.panel.answer.text() == "You are finished."
+    assert not g.panel.next_button.isVisible()
+
+
+def test_failed_message_shows_as_a_step_failure_does(guide):
+    g = guide(reply(), "not json", "still not json", reply("Help", 3))
+    g.start()
+    g.wait_for(State.STEP)
+
+    send(g, "Is this right?")
+    g.wait_for(State.ERROR)
+
+    assert "invalid model response after one retry" in g.panel.error.text()
+    assert g.panel.next_button.text() == "Retry"
+    assert g.panel.question_input.isEnabled()
+    g.panel.next_button.click()
+    g.wait_for(State.STEP)
+    assert ">Help</span>" in g.panel.instruction.text()
+
+
+def test_answer_to_a_message_sent_from_an_error_keeps_the_error(guide):
+    g = guide(ModelProviderError("Anthropic API error 500: boom"), answer("The API failed."))
+    g.start()
+    g.wait_for(State.ERROR)
+
+    send(g, "What happened?")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.ERROR)
+
+    assert g.panel.error.isVisible() and "boom" in g.panel.error.text()
+    assert g.panel.answer.text() == "The API failed."
+    assert g.panel.next_button.text() == "Retry" and g.panel.next_button.isEnabled()
+
+
+def test_every_call_for_a_message_is_in_the_usage_log(guide, usage_log):
+    g = guide(reply(), "not json", answer())
+    g.start()
+    g.wait_for(State.STEP)
+
+    send(g, "Is this right?")
+    g.wait_for(State.THINKING)
+    g.wait_for(State.STEP)
+
+    records = [json.loads(line) for line in usage_log.read_text().splitlines()]
+    assert [record["attempt"] for record in records] == [1, 1, 2]
+    assert len({record["session_id"] for record in records}) == 1
+
+
+def test_ending_the_task_clears_the_question_field(guide):
+    g = guide(reply())
+    g.start()
+    g.wait_for(State.STEP)
+    g.panel.question_input.setText("half typed")
+
+    g.panel.new_task_button.click()
+
+    assert g.panel.question_input.text() == ""
+    assert not g.panel.footer.isVisible()
 
 
 def test_panel_is_invisible_at_every_capture_and_returns_afterwards(guide):
@@ -450,7 +623,7 @@ def test_hide_and_guide_me_keep_the_task_and_a_step_that_came_meanwhile(guide):
     g.panel.guide_me_button.click()
     g.panel.next_button.click()
     g.wait_for(State.STEP)
-    assert g.provider.requests[-1].history == ("Click File, in the top menu.",)
+    assert g.provider.requests[-1].history == steps_shown(["Click File, in the top menu."])
     assert len(g.goals) == 1
 
 
@@ -805,7 +978,7 @@ def test_hiding_and_showing_again_keeps_the_session(guide):
 
     g.panel.next_button.click()
     g.wait_for(State.STEP)
-    assert g.provider.requests[-1].history == ("Click File, in the top menu.",)
+    assert g.provider.requests[-1].history == steps_shown(["Click File, in the top menu."])
     assert len(g.goals) == 1
 
 
